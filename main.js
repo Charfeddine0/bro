@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, net } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { fork } = require("child_process");
@@ -18,10 +18,12 @@ function defaultConfig() {
   return {
     proxy: {
       enabled: false,
+      scheme: "socks5",
       host: "127.0.0.1",
       port: 1080,
       username: "",
-      password: ""
+      password: "",
+      bypass: "<-loopback>"
     },
     extensions: [],
     bookmarks: [],
@@ -68,17 +70,109 @@ let CFG = defaultConfig();
 /* =========================
    IP Fetch (api.myip.com)
    ========================= */
-async function getMyIp() {
-  const res = await fetch("https://api.myip.com");
-  if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
-  return await res.json(); // { ip, country, cc }
+async function fetchJsonWithSession(ses, url, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const req = net.request({ url, session: ses });
+    const timer = setTimeout(() => {
+      req.abort();
+      reject(new Error("request timeout"));
+    }, timeoutMs);
+
+    req.on("response", (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        clearTimeout(timer);
+        const body = Buffer.concat(chunks).toString("utf-8");
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          reject(new Error("invalid json response"));
+        }
+      });
+      res.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+    req.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    req.end();
+  });
+}
+
+async function getMyIp(ses) {
+  const url = "https://api.myip.com";
+  try {
+    if (!ses) throw new Error("missing session");
+    return await fetchJsonWithSession(ses, url);
+  } catch (e) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
+    return await res.json(); // { ip, country, cc }
+  }
 }
 
 /* =========================
-   Proxy (SOCKS5)
+   Proxy
    ========================= */
+function normalizeProxyScheme(scheme) {
+  const allowed = new Set(["socks5", "socks5h", "http", "https"]);
+  const value = String(scheme || "").toLowerCase().trim();
+  return allowed.has(value) ? value : "socks5";
+}
+
+function normalizeProxyPort(port, fallback) {
+  const numeric = Number(port);
+  if (!Number.isFinite(numeric)) return fallback;
+  const rounded = Math.round(numeric);
+  if (rounded < 1 || rounded > 65535) return fallback;
+  return rounded;
+}
+
+function normalizeProxyConfig(input = {}, previous = {}) {
+  const base = defaultConfig().proxy;
+  const enabled = !!input.enabled;
+  const scheme = normalizeProxyScheme(input.scheme ?? previous.scheme ?? base.scheme);
+  const host = String(input.host ?? previous.host ?? base.host).trim() || base.host;
+  const port = normalizeProxyPort(input.port ?? previous.port ?? base.port, base.port);
+  const username = String(input.username ?? previous.username ?? base.username);
+  let password = "";
+
+  if (input.password === "*****") {
+    password = String(previous.password ?? base.password ?? "");
+  } else if (typeof input.password === "string") {
+    password = input.password;
+  } else if (input.password == null) {
+    password = String(previous.password ?? base.password ?? "");
+  } else {
+    password = String(input.password);
+  }
+
+  const bypass = String(input.bypass ?? previous.bypass ?? base.bypass ?? "").trim();
+
+  return {
+    enabled,
+    scheme,
+    host,
+    port,
+    username,
+    password,
+    bypass
+  };
+}
+
+function getNormalizedProxyConfig() {
+  const current = CFG.proxy || defaultConfig().proxy;
+  const normalized = normalizeProxyConfig(current, current);
+  CFG.proxy = normalized;
+  return normalized;
+}
+
 async function applyProxyToSession(ses) {
-  const p = CFG.proxy || defaultConfig().proxy;
+  const p = getNormalizedProxyConfig();
 
   if (!p.enabled) {
     await ses.setProxy({ mode: "direct" });
@@ -86,9 +180,12 @@ async function applyProxyToSession(ses) {
     return;
   }
 
-  const rule = `socks5://${p.host}:${p.port}`;
-  await ses.setProxy({ proxyRules: rule });
-  console.log("[PROXY] enabled:", rule);
+  const rule = `${p.scheme}://${p.host}:${p.port}`;
+  const proxyConfig = { proxyRules: rule };
+  if (p.bypass) proxyConfig.proxyBypassRules = p.bypass;
+
+  await ses.setProxy(proxyConfig);
+  console.log("[PROXY] enabled:", rule, p.bypass ? `bypass=${p.bypass}` : "");
 }
 
 /* =========================
@@ -221,9 +318,10 @@ async function createWindow() {
 
   // Proxy auth if needed
   app.on("login", (event, webContents, request, authInfo, callback) => {
-    if (authInfo && authInfo.isProxy && CFG.proxy?.enabled) {
+    const p = getNormalizedProxyConfig();
+    if (authInfo && authInfo.isProxy && p.enabled) {
       event.preventDefault();
-      callback(CFG.proxy.username || "", CFG.proxy.password || "");
+      callback(p.username || "", p.password || "");
       return;
     }
   });
@@ -239,6 +337,7 @@ async function createWindow() {
    ========================= */
 app.whenReady().then(() => {
   CFG = readConfig();
+  CFG.proxy = getNormalizedProxyConfig();
   writeConfig(CFG);
   startGeoService();
   createWindow();
@@ -256,7 +355,7 @@ app.on("window-all-closed", () => {
    IPC: IP for tab
    ========================= */
 ipcMain.handle("get-ip-for-tab", async (event, tabId) => {
-  const data = await getMyIp();
+  const data = await getMyIp(event.sender.session);
   console.log("[BACKEND] New tab:", tabId, "IP:", data.ip, "Country:", data.country, data.cc);
   return { tabId, ...data };
 });
@@ -276,6 +375,7 @@ ipcMain.handle("geo:enrich-ip", async (event, ip) => {
    ========================= */
 ipcMain.handle("cfg:get", async () => {
   CFG = readConfig();
+  CFG.proxy = getNormalizedProxyConfig();
   return {
     proxy: { ...CFG.proxy, password: CFG.proxy?.password ? "*****" : "" },
     extensions: CFG.extensions || [],
@@ -290,15 +390,7 @@ ipcMain.handle("cfg:get", async () => {
    ========================= */
 ipcMain.handle("proxy:set", async (event, proxyConfig) => {
   CFG = readConfig();
-  CFG.proxy = {
-    enabled: !!proxyConfig?.enabled,
-    host: String(proxyConfig?.host || "127.0.0.1"),
-    port: Number(proxyConfig?.port || 1080),
-    username: String(proxyConfig?.username || ""),
-    password: (proxyConfig?.password === "*****")
-      ? String(CFG.proxy?.password || "")
-      : String(proxyConfig?.password || "")
-  };
+  CFG.proxy = normalizeProxyConfig(proxyConfig, CFG.proxy);
 
   writeConfig(CFG);
   await applyProxyToSession(event.sender.session);
