@@ -1,0 +1,16 @@
+{
+  "name": "mybrowser",
+  "version": "1.0.0",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^30.5.1"
+  },
+  "description": "",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

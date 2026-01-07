@@ -1,0 +1,469 @@
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const path = require("path");
+const fs = require("fs");
+const { fork } = require("child_process");
+
+// WebRTC IP leak mitigation (system-level hint)
+app.commandLine.appendSwitch("force-webrtc-ip-handling-policy", "disable_non_proxied_udp");
+app.commandLine.appendSwitch("webrtc-hide-local-ips-with-mdns");
+
+/* =========================
+   CONFIG (auto saved)
+   ========================= */
+function configPath() {
+  return path.join(app.getPath("userData"), "config.json");
+}
+
+function defaultConfig() {
+  return {
+    proxy: {
+      enabled: false,
+      host: "127.0.0.1",
+      port: 1080,
+      username: "",
+      password: ""
+    },
+    extensions: [],
+    bookmarks: [],
+    history: [],
+    historyLimit: 500
+  };
+}
+
+function readConfig() {
+  try {
+    const p = configPath();
+    if (!fs.existsSync(p)) return defaultConfig();
+    const raw = fs.readFileSync(p, "utf-8");
+    const cfg = JSON.parse(raw);
+    const base = defaultConfig();
+    return {
+      ...base,
+      ...cfg,
+      proxy: { ...base.proxy, ...(cfg.proxy || {}) },
+      extensions: Array.isArray(cfg.extensions) ? cfg.extensions : base.extensions,
+      bookmarks: Array.isArray(cfg.bookmarks) ? cfg.bookmarks : base.bookmarks,
+      history: Array.isArray(cfg.history) ? cfg.history : base.history
+    };
+  } catch (e) {
+    console.warn("[CFG] readConfig failed:", e);
+    return defaultConfig();
+  }
+}
+
+function writeConfig(cfg) {
+  try {
+    const p = configPath();
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2), "utf-8");
+    return true;
+  } catch (e) {
+    console.warn("[CFG] writeConfig failed:", e);
+    return false;
+  }
+}
+
+let CFG = defaultConfig();
+
+/* =========================
+   IP Fetch (api.myip.com)
+   ========================= */
+async function getMyIp() {
+  const res = await fetch("https://api.myip.com");
+  if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
+  return await res.json(); // { ip, country, cc }
+}
+
+/* =========================
+   Proxy (SOCKS5)
+   ========================= */
+async function applyProxyToSession(ses) {
+  const p = CFG.proxy || defaultConfig().proxy;
+
+  if (!p.enabled) {
+    await ses.setProxy({ mode: "direct" });
+    console.log("[PROXY] disabled (direct)");
+    return;
+  }
+
+  const rule = `socks5://${p.host}:${p.port}`;
+  await ses.setProxy({ proxyRules: rule });
+  console.log("[PROXY] enabled:", rule);
+}
+
+/* =========================
+   Extensions load/unload
+   ========================= */
+function normalizeExtPath(p) {
+  return path.resolve(String(p || ""));
+}
+
+async function loadEnabledExtensions(ses) {
+  const list = Array.isArray(CFG.extensions) ? CFG.extensions : [];
+  for (const item of list) {
+    try {
+      if (!item?.path || !item.enabled) continue;
+      const extPath = normalizeExtPath(item.path);
+      const ext = await ses.loadExtension(extPath, { allowFileAccess: true });
+      console.log("[EXT] Loaded:", ext.name, "id:", ext.id, "path:", extPath);
+    } catch (e) {
+      console.warn("[EXT] load failed:", item?.path, e?.message || e);
+    }
+  }
+}
+
+function listLoadedExtensions(ses) {
+  const map = ses.getAllExtensions();
+  return Object.values(map).map(ext => ({
+    id: ext.id,
+    name: ext.name,
+    version: ext.version,
+    path: ext.path
+  }));
+}
+
+async function unloadExtensionById(ses, id) {
+  try {
+    ses.removeExtension(String(id));
+    return true;
+  } catch (e) {
+    console.warn("[EXT] unload failed:", id, e);
+    return false;
+  }
+}
+
+/* =========================
+   External Geo Service (child)
+   ========================= */
+let GEO_CHILD = null;
+
+function startGeoService() {
+  const childPath = path.join(__dirname, "geo_service.js");
+  try {
+    GEO_CHILD = fork(childPath, [], {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        GEO_PORT: "8787",
+        NOMINATIM_EMAIL: "youremail@example.com",
+        NOMINATIM_UA: "MyBrowser/1.0 (contact: youremail@example.com)",
+        MMDB_PATH: path.join(__dirname, "GeoLite2-City.mmdb")
+      }
+    });
+    console.log("[GEO] service started (child process)");
+  } catch (e) {
+    console.warn("[GEO] failed to start service:", e);
+  }
+}
+
+/* =========================
+   Window
+   ========================= */
+async function createWindow() {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 880,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.js"),
+      webviewTag: true
+    }
+  });
+
+  const ses = win.webContents.session;
+
+  // ===== STRONG Anti-FP / Privacy hardening =====
+
+  // 1) clear everything on startup
+  await ses.clearCache();
+  await ses.clearStorageData({
+    storages: [
+      "cookies",
+      "localstorage",
+      "sessionstorage",
+      "indexdb",
+      "cachestorage",
+      "serviceworkers",
+      "websql"
+    ],
+    quotas: ["temporary", "persistent", "syncable"]
+  });
+  console.log("[PRIVACY] cleared cache + storage on startup");
+
+  // 2) block sensitive permissions
+  ses.setPermissionRequestHandler((webContents, permission, callback) => {
+    const blocked = new Set([
+      "media",
+      "geolocation",
+      "notifications",
+      "midi",
+      "pointerLock",
+      "clipboard-read",
+      "display-capture",
+      "hid",
+      "serial",
+      "usb",
+      "bluetooth"
+    ]);
+    if (blocked.has(permission)) return callback(false);
+    callback(true);
+  });
+
+  // 3) helper privacy headers
+  ses.webRequest.onHeadersReceived((details, cb) => {
+    const headers = details.responseHeaders || {};
+    headers["Permissions-Policy"] = [
+      "geolocation=(), microphone=(), camera=(), usb=(), payment=(), interest-cohort=()"
+    ];
+    cb({ responseHeaders: headers });
+  });
+
+  // Proxy auth if needed
+  app.on("login", (event, webContents, request, authInfo, callback) => {
+    if (authInfo && authInfo.isProxy && CFG.proxy?.enabled) {
+      event.preventDefault();
+      callback(CFG.proxy.username || "", CFG.proxy.password || "");
+      return;
+    }
+  });
+
+  await applyProxyToSession(ses);
+  await loadEnabledExtensions(ses);
+
+  win.loadFile("index.html");
+}
+
+/* =========================
+   App lifecycle
+   ========================= */
+app.whenReady().then(() => {
+  CFG = readConfig();
+  writeConfig(CFG);
+  startGeoService();
+  createWindow();
+});
+
+app.on("before-quit", () => {
+  try { if (GEO_CHILD) GEO_CHILD.kill(); } catch {}
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
+
+/* =========================
+   IPC: IP for tab
+   ========================= */
+ipcMain.handle("get-ip-for-tab", async (event, tabId) => {
+  const data = await getMyIp();
+  console.log("[BACKEND] New tab:", tabId, "IP:", data.ip, "Country:", data.country, data.cc);
+  return { tabId, ...data };
+});
+
+/* =========================
+   IPC: external geo enrich
+   ========================= */
+ipcMain.handle("geo:enrich-ip", async (event, ip) => {
+  const serviceUrl = `http://127.0.0.1:8787/enrich?ip=${encodeURIComponent(String(ip || ""))}`;
+  const r = await fetch(serviceUrl);
+  if (!r.ok) throw new Error("geo_service failed: " + r.status);
+  return await r.json();
+});
+
+/* =========================
+   IPC: config get
+   ========================= */
+ipcMain.handle("cfg:get", async () => {
+  CFG = readConfig();
+  return {
+    proxy: { ...CFG.proxy, password: CFG.proxy?.password ? "*****" : "" },
+    extensions: CFG.extensions || [],
+    bookmarks: CFG.bookmarks || [],
+    history: CFG.history || [],
+    historyLimit: CFG.historyLimit || 500
+  };
+});
+
+/* =========================
+   IPC: proxy set (save + apply)
+   ========================= */
+ipcMain.handle("proxy:set", async (event, proxyConfig) => {
+  CFG = readConfig();
+  CFG.proxy = {
+    enabled: !!proxyConfig?.enabled,
+    host: String(proxyConfig?.host || "127.0.0.1"),
+    port: Number(proxyConfig?.port || 1080),
+    username: String(proxyConfig?.username || ""),
+    password: (proxyConfig?.password === "*****")
+      ? String(CFG.proxy?.password || "")
+      : String(proxyConfig?.password || "")
+  };
+
+  writeConfig(CFG);
+  await applyProxyToSession(event.sender.session);
+
+  return { ok: true, proxy: { ...CFG.proxy, password: CFG.proxy.password ? "*****" : "" } };
+});
+
+/* =========================
+   IPC: Extensions manager
+   ========================= */
+ipcMain.handle("ext:pickFolder", async () => {
+  const r = await dialog.showOpenDialog({
+    title: "Select unpacked Chrome extension folder (contains manifest.json)",
+    properties: ["openDirectory"]
+  });
+  if (r.canceled || !r.filePaths?.length) return { ok: false };
+  return { ok: true, path: r.filePaths[0] };
+});
+
+ipcMain.handle("ext:list", async (event) => {
+  const ses = event.sender.session;
+  CFG = readConfig();
+  const loaded = listLoadedExtensions(ses);
+  const configured = Array.isArray(CFG.extensions) ? CFG.extensions : [];
+
+  const merged = configured.map(item => {
+    const p = normalizeExtPath(item.path);
+    const found = loaded.find(x => normalizeExtPath(x.path) === p);
+    return {
+      path: p,
+      enabled: !!item.enabled,
+      id: found?.id || null,
+      name: found?.name || "(not loaded)"
+    };
+  });
+
+  return { ok: true, configured: merged, loaded };
+});
+
+ipcMain.handle("ext:add", async (event, extPath) => {
+  const ses = event.sender.session;
+  CFG = readConfig();
+
+  const p = normalizeExtPath(extPath);
+  if (!CFG.extensions.some(x => normalizeExtPath(x.path) === p)) {
+    CFG.extensions.push({ path: p, enabled: true });
+    writeConfig(CFG);
+  }
+
+  try {
+    const ext = await ses.loadExtension(p, { allowFileAccess: true });
+    return { ok: true, id: ext.id, name: ext.name, path: p };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e), path: p };
+  }
+});
+
+ipcMain.handle("ext:toggle", async (event, payload) => {
+  const ses = event.sender.session;
+  const p = normalizeExtPath(payload?.path);
+  const enable = !!payload?.enabled;
+
+  CFG = readConfig();
+  const idx = CFG.extensions.findIndex(x => normalizeExtPath(x.path) === p);
+  if (idx === -1) return { ok: false, error: "Extension not found in config." };
+
+  CFG.extensions[idx].enabled = enable;
+  writeConfig(CFG);
+
+  const loaded = listLoadedExtensions(ses);
+  const found = loaded.find(x => normalizeExtPath(x.path) === p);
+
+  if (!enable) {
+    if (found?.id) await unloadExtensionById(ses, found.id);
+    return { ok: true, enabled: false };
+  }
+
+  try {
+    const ext = await ses.loadExtension(p, { allowFileAccess: true });
+    return { ok: true, enabled: true, id: ext.id, name: ext.name };
+  } catch (e) {
+    return { ok: false, enabled: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle("ext:remove", async (event, payload) => {
+  const ses = event.sender.session;
+  const p = normalizeExtPath(payload?.path);
+
+  CFG = readConfig();
+  CFG.extensions = (CFG.extensions || []).filter(x => normalizeExtPath(x.path) !== p);
+  writeConfig(CFG);
+
+  const loaded = listLoadedExtensions(ses);
+  const found = loaded.find(x => normalizeExtPath(x.path) === p);
+  if (found?.id) await unloadExtensionById(ses, found.id);
+
+  return { ok: true };
+});
+
+/* =========================
+   IPC: Bookmarks
+   ========================= */
+ipcMain.handle("bm:list", async () => {
+  CFG = readConfig();
+  return { ok: true, bookmarks: CFG.bookmarks || [] };
+});
+
+ipcMain.handle("bm:add", async (event, payload) => {
+  const title = String(payload?.title || "").trim() || "Bookmark";
+  const url = String(payload?.url || "").trim();
+  if (!url) return { ok: false, error: "Missing url" };
+
+  CFG = readConfig();
+  const exists = (CFG.bookmarks || []).some(b => String(b.url) === url);
+  if (!exists) {
+    CFG.bookmarks.push({ title, url, createdAt: Date.now() });
+    writeConfig(CFG);
+  }
+  return { ok: true };
+});
+
+ipcMain.handle("bm:remove", async (event, payload) => {
+  const url = String(payload?.url || "").trim();
+  CFG = readConfig();
+  CFG.bookmarks = (CFG.bookmarks || []).filter(b => String(b.url) !== url);
+  writeConfig(CFG);
+  return { ok: true };
+});
+
+/* =========================
+   IPC: History
+   ========================= */
+ipcMain.handle("hist:list", async () => {
+  CFG = readConfig();
+  return { ok: true, history: CFG.history || [] };
+});
+
+ipcMain.handle("hist:clear", async () => {
+  CFG = readConfig();
+  CFG.history = [];
+  writeConfig(CFG);
+  return { ok: true };
+});
+
+ipcMain.handle("hist:add", async (event, payload) => {
+  const url = String(payload?.url || "").trim();
+  const title = String(payload?.title || "").trim();
+  if (!url) return { ok: false };
+
+  CFG = readConfig();
+  const limit = Number(CFG.historyLimit || 500);
+
+  const h = CFG.history || [];
+  const last = h[0];
+  if (last && last.url === url) {
+    last.ts = Date.now();
+    if (title) last.title = title;
+    writeConfig(CFG);
+    return { ok: true };
+  }
+
+  h.unshift({ url, title, ts: Date.now() });
+  CFG.history = h.slice(0, Math.max(50, limit));
+  writeConfig(CFG);
+
+  return { ok: true };
+});
