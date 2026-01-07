@@ -1,0 +1,613 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>MyBrowser</title>
+  <style>
+    body{margin:0;font-family:sans-serif;background:#fff}
+    #top{display:flex;gap:6px;padding:8px;background:#f3f3f3;align-items:center;border-bottom:1px solid #ddd}
+    #tabs{display:flex;gap:6px;padding:6px;background:#eaeaea;overflow:auto;border-bottom:1px solid #ddd}
+    .tab{
+      padding:6px 10px;background:#fff;border:1px solid #ccc;border-radius:10px;cursor:pointer;
+      display:flex;gap:8px;align-items:center;white-space:nowrap
+    }
+    .tab.active{background:#dbeafe;border-color:#93c5fd}
+    .tab small{opacity:.75;font-family:monospace}
+    .tab .x{border:none;background:transparent;cursor:pointer;font-size:14px;padding:0 4px;opacity:.7}
+    .tab .x:hover{opacity:1}
+
+    #url{flex:1;padding:8px;border:1px solid #ccc;border-radius:10px}
+    button{padding:7px 10px;border:1px solid #ccc;border-radius:10px;cursor:pointer;background:#fff}
+    button:hover{background:#f8f8f8}
+    .mini{padding:6px 8px;border-radius:10px}
+
+    #bmbar{
+      display:flex; gap:8px; align-items:center;
+      padding:6px 10px; background:#fafafa; border-bottom:1px solid #e5e7eb;
+      overflow:auto; white-space:nowrap;
+    }
+    .bmitem{
+      display:inline-flex; align-items:center; gap:6px;
+      padding:6px 10px; border:1px solid #e5e7eb; border-radius:999px;
+      background:#fff; cursor:pointer;
+      font-size:13px;
+    }
+    .bmitem:hover{background:#f3f4f6}
+    .bmitem .del{border:none;background:transparent;cursor:pointer;opacity:.6}
+    .bmitem .del:hover{opacity:1}
+
+    #views{width:100vw;height:calc(100vh - 128px);position:relative;}
+    webview{width:100%;height:100%;display:none;}
+
+    .panel{
+      display:none; position:fixed; top:52px; right:10px; width:380px;
+      background:#fff; border:1px solid #ddd; box-shadow:0 6px 18px rgba(0,0,0,.15);
+      padding:10px; border-radius:12px; z-index:99999;
+      max-height: 80vh; overflow:auto;
+    }
+    .panel h3{margin:0 0 10px 0; font-size:14px;}
+    .row{display:flex; gap:8px; align-items:center;}
+    .row input{flex:1;padding:8px;border:1px solid #ccc;border-radius:10px;}
+    .hr{height:1px;background:#eee;margin:10px 0;}
+
+    .item{border:1px solid #eee;border-radius:12px;padding:8px;margin:6px 0;}
+    .item .name{font-weight:700}
+    .muted{opacity:.75;font-size:12px; word-break:break-all}
+    .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;}
+  </style>
+</head>
+<body>
+
+<div id="top">
+  <button id="back">←</button>
+  <button id="forward">→</button>
+  <button id="reload">⟳</button>
+  <input id="url" placeholder="https://example.com"/>
+  <button id="go">Go</button>
+
+  <button id="newtab">＋</button>
+  <button id="newIncog">🕶️</button>
+
+  <button id="devtools">Dev</button>
+  <button id="proxyBtn">Proxy</button>
+  <button id="extBtn">Extensions</button>
+  <button id="bmBtn">Bookmarks</button>
+  <button id="histBtn">History</button>
+</div>
+
+<div id="bmbar"></div>
+<div id="tabs"></div>
+<div id="views"></div>
+
+<div id="proxyPanel" class="panel">
+  <div class="row" style="justify-content:space-between;">
+    <h3>SOCKS5 Proxy</h3>
+    <button id="proxyClose" class="mini">✕</button>
+  </div>
+
+  <label><input type="checkbox" id="p_enabled"> Enabled</label>
+  <div class="hr"></div>
+
+  <div class="row"><input id="p_host" placeholder="host (e.g. 127.0.0.1)"></div><br>
+  <div class="row"><input id="p_port" placeholder="port (e.g. 1080)"></div><br>
+  <div class="row"><input id="p_user" placeholder="username (optional)"></div><br>
+  <div class="row"><input id="p_pass" placeholder="password (optional)" type="password"></div><br>
+
+  <button id="proxyApply" style="width:100%;">Apply & Save (reload active tab)</button>
+  <p class="muted">Settings are auto-saved to config.json.</p>
+</div>
+
+<div id="extPanel" class="panel">
+  <div class="row" style="justify-content:space-between;">
+    <h3>Extensions Manager</h3>
+    <button id="extClose" class="mini">✕</button>
+  </div>
+
+  <div class="row" style="justify-content:space-between;">
+    <button id="extAdd" class="mini">＋ Add (Folder)</button>
+    <button id="extRefresh" class="mini">⟳ Refresh</button>
+  </div>
+
+  <div class="hr"></div>
+  <div id="extList"></div>
+  <p class="muted">Some Chrome extensions may not fully work in Electron.</p>
+</div>
+
+<div id="bmPanel" class="panel">
+  <div class="row" style="justify-content:space-between;">
+    <h3>Bookmarks</h3>
+    <button id="bmClose" class="mini">✕</button>
+  </div>
+
+  <div class="row" style="justify-content:space-between;">
+    <button id="bmAddCurrent" class="mini">★ Add current</button>
+    <button id="bmRefresh" class="mini">⟳ Refresh</button>
+  </div>
+
+  <div class="hr"></div>
+  <div id="bmList"></div>
+</div>
+
+<div id="histPanel" class="panel">
+  <div class="row" style="justify-content:space-between;">
+    <h3>History</h3>
+    <button id="histClose" class="mini">✕</button>
+  </div>
+
+  <div class="row" style="justify-content:space-between;">
+    <button id="histClear" class="mini">🗑️ Clear</button>
+    <button id="histRefresh" class="mini">⟳ Refresh</button>
+  </div>
+
+  <div class="hr"></div>
+  <div id="histList"></div>
+</div>
+
+<script>
+  const tabsEl = document.getElementById("tabs");
+  const viewsEl = document.getElementById("views");
+  const bmbarEl = document.getElementById("bmbar");
+  const urlInput = document.getElementById("url");
+
+  // ===== IP/Geo list in console =====
+  window.__IP_GEO_LOG__ = window.__IP_GEO_LOG__ || [];
+  function logIpGeo(entry){
+    window.__IP_GEO_LOG__.unshift(entry);
+    console.clear();
+    console.log("✅ IP/Geo Log list (latest first):");
+    console.table(window.__IP_GEO_LOG__.map(x => ({
+      ts: new Date(x.ts).toLocaleString(),
+      tabId: x.tabId,
+      ip: x.ip,
+      lat: x.geo?.latitude ?? "",
+      lon: x.geo?.longitude ?? "",
+      city: x.geo?.city ?? "",
+      region: x.geo?.region ?? "",
+      country: x.geo?.country ?? "",
+      address: x.nominatim?.display_name ?? (x.nominatim?.error ?? x.error ?? "")
+    })));
+  }
+
+  function escapeHtml(s){
+    return String(s || "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  function normalizeUrl(input){
+    let u = (input || "").trim();
+    if(!u) return "";
+    if(!u.startsWith("http://") && !u.startsWith("https://")){
+      if (u.includes(" ")) return "https://www.google.com/search?q=" + encodeURIComponent(u);
+      u = "https://" + u;
+    }
+    return u;
+  }
+
+  function partitionForTab(tab){
+    return tab.incognito ? `temp:incog_${tab.id}` : `persist:tab_${tab.id}`;
+  }
+  function getWebview(tabId){ return document.getElementById("wv_" + tabId); }
+  function getActiveTab(){ return tabs.find(t => t.id === activeId) || null; }
+  function activeWebview(){ const tab = getActiveTab(); return tab ? getWebview(tab.id) : null; }
+
+  // Load Strong blocker code once
+  let WEBRTC_BLOCKER_CODE = "";
+  async function loadWebrtcFileOnce(){
+    if (WEBRTC_BLOCKER_CODE) return WEBRTC_BLOCKER_CODE;
+    const r = await fetch("./webrtc_blocker.js");
+    WEBRTC_BLOCKER_CODE = await r.text();
+    return WEBRTC_BLOCKER_CODE;
+  }
+
+  function buildIPInjector(ip){
+    return `
+      (function(){
+        try{
+          window.__PUBLIC_IP__ = ${JSON.stringify(String(ip||""))};
+          window.__PUBLIC_IP_TS__ = Date.now();
+          console.log("[INJECT] IP injected:", window.__PUBLIC_IP__);
+        }catch(e){}
+      })();
+    `;
+  }
+
+  async function injectProtection(tab){
+    const wv = getWebview(tab.id);
+    if (!wv) return;
+    try{
+      const strongCode = await loadWebrtcFileOnce();
+      await wv.executeJavaScript(strongCode, true);
+      await wv.executeJavaScript(buildIPInjector(tab.ip || ""), true);
+    }catch(e){}
+  }
+
+  // Tabs
+  let tabs = [];
+  let activeId = null;
+
+  function renderTabs(){
+    tabsEl.innerHTML = "";
+    tabs.forEach(t=>{
+      const d = document.createElement("div");
+      d.className = "tab" + (t.id===activeId ? " active":"");
+      d.onclick = ()=>switchTab(t.id);
+
+      d.innerHTML = `
+        <span>${escapeHtml(t.title || "Tab")}${t.incognito ? " 🕶️" : ""}</span>
+        ${t.ip ? `<small>${escapeHtml(t.ip)}</small>` : ""}
+        <button class="x" title="Close">×</button>
+      `;
+
+      d.querySelector(".x").onclick = (ev) => {
+        ev.stopPropagation();
+        closeTab(t.id);
+      };
+
+      tabsEl.appendChild(d);
+    });
+  }
+
+  function showOnlyActiveWebview(){
+    tabs.forEach(t => {
+      const wv = getWebview(t.id);
+      if (!wv) return;
+      wv.style.display = (t.id === activeId) ? "block" : "none";
+    });
+  }
+
+  function switchTab(id){
+    activeId = id;
+    const tab = getActiveTab();
+    if (tab) urlInput.value = tab.src || "";
+    showOnlyActiveWebview();
+    renderTabs();
+  }
+
+  function closeTab(id){
+    const idx = tabs.findIndex(t => t.id === id);
+    if (idx === -1) return;
+
+    const wasActive = (id === activeId);
+    const wv = getWebview(id);
+    if (wv) wv.remove();
+
+    tabs.splice(idx, 1);
+
+    if (!tabs.length){
+      createTab({ incognito:false, url:"https://google.com" });
+      return;
+    }
+
+    if (wasActive){
+      const next = tabs[Math.max(0, idx-1)];
+      activeId = next.id;
+      urlInput.value = next.src || "";
+    }
+
+    showOnlyActiveWebview();
+    renderTabs();
+  }
+
+  function attachWebviewEvents(tab){
+    const wv = getWebview(tab.id);
+    if (!wv) return;
+
+    wv.addEventListener("dom-ready", () => injectProtection(tab));
+    wv.addEventListener("did-finish-load", () => injectProtection(tab));
+
+    const navHandler = async (e) => {
+      tab.src = e.url;
+      if (tab.id === activeId) urlInput.value = e.url;
+      try { await window.HIST.add({ url: e.url, title: tab.title || "" }); } catch {}
+      injectProtection(tab);
+    };
+
+    wv.addEventListener("did-navigate", navHandler);
+    wv.addEventListener("did-navigate-in-page", navHandler);
+
+    wv.addEventListener("page-title-updated", async (e) => {
+      tab.title = e.title || tab.title;
+      renderTabs();
+      try { if (tab.src) await window.HIST.add({ url: tab.src, title: tab.title || "" }); } catch {}
+    });
+  }
+
+  function createWebviewForTab(tab){
+    const wv = document.createElement("webview");
+    wv.id = "wv_" + tab.id;
+    wv.src = tab.src || "https://google.com";
+    wv.setAttribute("allowpopups", "true");
+    wv.partition = partitionForTab(tab);
+    viewsEl.appendChild(wv);
+    attachWebviewEvents(tab);
+  }
+
+  function createTab({ incognito=false, url="https://google.com" } = {}){
+    const id = Date.now() + Math.floor(Math.random()*999);
+    const tab = { id, title: "New Tab", src: url, ip: "", incognito };
+    tabs.push(tab);
+    createWebviewForTab(tab);
+    switchTab(id);
+    return tab;
+  }
+
+  // Navigation
+  document.getElementById("go").onclick = ()=>{
+    const wv = activeWebview();
+    if (!wv) return;
+    const u = normalizeUrl(urlInput.value);
+    if(!u) return;
+    wv.loadURL(u);
+  };
+  urlInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      document.getElementById("go").click();
+    }
+  });
+
+  document.getElementById("back").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.goBack(); };
+  document.getElementById("forward").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.goForward(); };
+  document.getElementById("reload").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.reload(); };
+  document.getElementById("devtools").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.openDevTools(); };
+
+  async function onNewTab(incognito){
+    const tab = createTab({ incognito: !!incognito, url: "https://google.com" });
+
+    // 1) get IP from backend
+    let info = null;
+    try {
+      info = await window.AutoIP.getIpForTab(tab.id);
+      tab.ip = info.ip || "";
+    } catch (e) {
+      tab.ip = "";
+    }
+
+    // 2) enrich outside browser (GeoLite -> Nominatim)
+    let enriched = null;
+    try {
+      enriched = await window.GeoAPI.enrichIp(tab.ip);
+    } catch (e) {
+      enriched = { ok:false, error: String(e?.message || e) };
+    }
+
+    // 3) store + print list in console
+    const entry = { ts: Date.now(), tabId: tab.id, ip: tab.ip, ...enriched };
+    logIpGeo(entry);
+
+    renderTabs();
+    await injectProtection(tab);
+  }
+
+  document.getElementById("newtab").onclick = () => onNewTab(false);
+  document.getElementById("newIncog").onclick = () => onNewTab(true);
+
+  // Proxy UI
+  const proxyPanel = document.getElementById("proxyPanel");
+  document.getElementById("proxyBtn").onclick = async ()=> {
+    proxyPanel.style.display = (proxyPanel.style.display === "none" ? "block" : "none");
+    if (proxyPanel.style.display === "block") await loadProxyUIFromConfig();
+  };
+  document.getElementById("proxyClose").onclick = () => proxyPanel.style.display = "none";
+
+  async function loadProxyUIFromConfig(){
+    const cfg = await window.CfgAPI.get();
+    const p = cfg.proxy || {};
+    document.getElementById("p_enabled").checked = !!p.enabled;
+    document.getElementById("p_host").value = p.host || "";
+    document.getElementById("p_port").value = String(p.port || 1080);
+    document.getElementById("p_user").value = p.username || "";
+    document.getElementById("p_pass").value = p.password || "";
+  }
+
+  document.getElementById("proxyApply").onclick = async () => {
+    const cfg = {
+      enabled: document.getElementById("p_enabled").checked,
+      host: document.getElementById("p_host").value.trim(),
+      port: Number(document.getElementById("p_port").value.trim() || 1080),
+      username: document.getElementById("p_user").value,
+      password: document.getElementById("p_pass").value
+    };
+    await window.ProxyCtl.setSocks5(cfg);
+    const wv = activeWebview();
+    if (wv) wv.reload();
+    await loadProxyUIFromConfig();
+  };
+
+  // Extensions UI
+  const extPanel = document.getElementById("extPanel");
+  const extList = document.getElementById("extList");
+  document.getElementById("extBtn").onclick = async ()=> {
+    extPanel.style.display = (extPanel.style.display === "none" ? "block" : "none");
+    if (extPanel.style.display === "block") await refreshExtensions();
+  };
+  document.getElementById("extClose").onclick = () => extPanel.style.display = "none";
+
+  function extCard(item){
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <div class="name">${escapeHtml(item.name || "(unknown)")}</div>
+      <div class="muted">Path: ${escapeHtml(item.path || "")}</div>
+      <div class="muted">ID: ${escapeHtml(item.id || "—")}</div>
+      <div class="actions">
+        <label style="margin-right:auto">
+          <input type="checkbox" class="extToggle" ${item.enabled ? "checked":""}> Enabled
+        </label>
+        <button class="extRemove mini">Remove</button>
+      </div>
+    `;
+
+    div.querySelector(".extToggle").addEventListener("change", async (e) => {
+      const enabled = !!e.target.checked;
+      const r = await window.ExtAPI.toggle({ path: item.path, enabled });
+      if (!r.ok) alert("Toggle failed: " + (r.error || "unknown"));
+      await refreshExtensions();
+    });
+
+    div.querySelector(".extRemove").addEventListener("click", async () => {
+      const ok = confirm("Remove this extension from config and unload it?");
+      if (!ok) return;
+      await window.ExtAPI.remove({ path: item.path });
+      await refreshExtensions();
+    });
+
+    return div;
+  }
+
+  async function refreshExtensions(){
+    extList.innerHTML = "Loading…";
+    const r = await window.ExtAPI.list();
+    if (!r.ok) { extList.innerHTML = "Failed."; return; }
+    extList.innerHTML = "";
+    const items = r.configured || [];
+    if (!items.length) {
+      extList.innerHTML = `<div class="muted">No extensions configured yet. Click “Add (Folder)”.</div>`;
+      return;
+    }
+    items.forEach(item => extList.appendChild(extCard(item)));
+  }
+
+  document.getElementById("extRefresh").onclick = refreshExtensions;
+  document.getElementById("extAdd").onclick = async () => {
+    const pick = await window.ExtAPI.pickFolder();
+    if (!pick.ok) return;
+    const r = await window.ExtAPI.add(pick.path);
+    if (!r.ok) alert("Add/load failed: " + (r.error || "unknown"));
+    await refreshExtensions();
+  };
+
+  // Bookmarks UI + bar
+  const bmPanel = document.getElementById("bmPanel");
+  const bmList = document.getElementById("bmList");
+  document.getElementById("bmBtn").onclick = async ()=> {
+    bmPanel.style.display = (bmPanel.style.display === "none" ? "block" : "none");
+    if (bmPanel.style.display === "block") await refreshBookmarks();
+  };
+  document.getElementById("bmClose").onclick = () => bmPanel.style.display = "none";
+  document.getElementById("bmRefresh").onclick = refreshBookmarks;
+
+  function bmCard(b){
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <div class="name">${escapeHtml(b.title || "Bookmark")}</div>
+      <div class="muted">${escapeHtml(b.url || "")}</div>
+      <div class="actions">
+        <button class="bmOpen mini">Open</button>
+        <button class="bmDel mini">Delete</button>
+      </div>
+    `;
+    div.querySelector(".bmOpen").onclick = () => {
+      const wv = activeWebview();
+      if (wv && b.url) wv.loadURL(b.url);
+    };
+    div.querySelector(".bmDel").onclick = async () => {
+      await window.BM.remove({ url: b.url });
+      await refreshBookmarks();
+    };
+    return div;
+  }
+
+  async function refreshBookmarks(){
+    const r = await window.BM.list();
+    const list = (r.bookmarks || []).slice().sort((a,b)=> (b.createdAt||0)-(a.createdAt||0));
+
+    bmList.innerHTML = "";
+    if (!list.length) bmList.innerHTML = `<div class="muted">No bookmarks yet.</div>`;
+    else list.forEach(b => bmList.appendChild(bmCard(b)));
+
+    bmbarEl.innerHTML = "";
+    const top = list.slice(0, 20);
+    top.forEach(b => {
+      const pill = document.createElement("div");
+      pill.className = "bmitem";
+      pill.innerHTML = `
+        <span>${escapeHtml(b.title || "Bookmark")}</span>
+        <button class="del" title="Remove">✕</button>
+      `;
+      pill.onclick = () => {
+        const wv = activeWebview();
+        if (wv && b.url) wv.loadURL(b.url);
+      };
+      pill.querySelector(".del").onclick = async (ev) => {
+        ev.stopPropagation();
+        await window.BM.remove({ url: b.url });
+        await refreshBookmarks();
+      };
+      bmbarEl.appendChild(pill);
+    });
+
+    if (!top.length) {
+      bmbarEl.innerHTML = `<span class="muted">No bookmarks — click “★ Add current” to pin here.</span>`;
+    }
+  }
+
+  document.getElementById("bmAddCurrent").onclick = async () => {
+    const tab = getActiveTab();
+    if (!tab?.src) return alert("No URL to bookmark.");
+    await window.BM.add({ title: tab.title || "Bookmark", url: tab.src });
+    await refreshBookmarks();
+  };
+
+  // History UI
+  const histPanel = document.getElementById("histPanel");
+  const histList = document.getElementById("histList");
+  document.getElementById("histBtn").onclick = async ()=> {
+    histPanel.style.display = (histPanel.style.display === "none" ? "block" : "none");
+    if (histPanel.style.display === "block") await refreshHistory();
+  };
+  document.getElementById("histClose").onclick = () => histPanel.style.display = "none";
+  document.getElementById("histRefresh").onclick = refreshHistory;
+
+  document.getElementById("histClear").onclick = async () => {
+    const ok = confirm("Clear all history?");
+    if (!ok) return;
+    await window.HIST.clear();
+    await refreshHistory();
+  };
+
+  function timeStr(ts){
+    try { return new Date(ts).toLocaleString(); } catch { return ""; }
+  }
+
+  function histCard(h){
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <div class="name">${escapeHtml(h.title || "(no title)")}</div>
+      <div class="muted">${escapeHtml(h.url || "")}</div>
+      <div class="muted">${escapeHtml(timeStr(h.ts))}</div>
+      <div class="actions">
+        <button class="histOpen mini">Open</button>
+      </div>
+    `;
+    div.querySelector(".histOpen").onclick = () => {
+      const wv = activeWebview();
+      if (wv && h.url) wv.loadURL(h.url);
+    };
+    return div;
+  }
+
+  async function refreshHistory(){
+    const r = await window.HIST.list();
+    const list = (r.history || []);
+    histList.innerHTML = "";
+    if (!list.length) histList.innerHTML = `<div class="muted">No history yet.</div>`;
+    else list.forEach(h => histList.appendChild(histCard(h)));
+  }
+
+  // Init
+  (async () => {
+    await loadWebrtcFileOnce();
+    createTab({ incognito:false, url:"https://google.com" });
+    renderTabs();
+    await refreshBookmarks();
+  })();
+</script>
+</body>
+</html>
