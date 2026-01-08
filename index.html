@@ -13,8 +13,25 @@
       --accent-soft:#dbeafe;
       --border:#e5e7eb;
       --shadow:0 10px 24px rgba(15,23,42,.15);
+      --surface-dark:#0f172a;
+      --panel-dark:#111827;
+      --text-dark:#e2e8f0;
     }
     body{margin:0;font-family:Inter,system-ui,Arial,sans-serif;background:linear-gradient(180deg,#f8fafc 0%,#eef2ff 100%);color:#111827}
+    body.dark{
+      background:linear-gradient(180deg,#0b1020 0%,#0f172a 100%);
+      color:var(--text-dark);
+    }
+    body.dark #tabs{background:rgba(15,23,42,.85);border-bottom-color:#1f2937}
+    body.dark .tab{background:#0f172a;border-color:#1f2937;color:var(--text-dark)}
+    body.dark .tab.active{background:#1e293b;border-color:#334155}
+    body.dark #bmbar{background:#0b1220;border-bottom-color:#1f2937}
+    body.dark .bmitem{background:#0f172a;border-color:#1f2937;color:var(--text-dark)}
+    body.dark .bmitem:hover{background:#111827}
+    body.dark .panel{background:var(--panel-dark);border-color:#1f2937;color:var(--text-dark)}
+    body.dark .row input,body.dark .row select{background:#0b1220;border-color:#1f2937;color:var(--text-dark)}
+    body.dark button{background:#0f172a;border-color:#1f2937;color:var(--text-dark)}
+    body.dark button:hover{background:#111827}
     #top{
       display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px;
       background:linear-gradient(135deg,#0f172a,#1e293b);
@@ -63,13 +80,15 @@
     .bmitem .del:hover{opacity:1}
 
     #views{width:100vw;height:calc(100vh - 142px);position:relative;background:#0b1220}
-    webview{width:100%;height:100%;display:none;}
-    iframe.webview-fallback{width:100%;height:100%;border:0;display:none;background:#fff}
-    .view-container{width:100%;height:100%;display:none;position:relative;}
-    .fallback-banner{
-      position:absolute;top:12px;left:12px;right:12px;
-      background:rgba(15,23,42,.88);color:#f8fafc;padding:10px 12px;
-      border-radius:12px;font-size:12px;z-index:2;box-shadow:0 6px 16px rgba(15,23,42,.25)
+    #views::before{
+      content:"Loading tab...";
+      position:absolute;
+      top:50%;
+      left:50%;
+      transform:translate(-50%,-50%);
+      color:#cbd5f5;
+      font-size:12px;
+      letter-spacing:.04em;
     }
 
     .panel{
@@ -89,6 +108,10 @@
     .muted{opacity:.75;font-size:12px; word-break:break-all}
     .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;}
     .badge{padding:4px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700}
+    .status{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid transparent}
+    .status.ok{background:#dcfce7;color:#166534;border-color:#bbf7d0}
+    .status.error{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+    .status.wait{background:#e0f2fe;color:#0c4a6e;border-color:#bae6fd}
   </style>
 </head>
 <body>
@@ -101,6 +124,7 @@
   </div>
 
   <div class="toolbar-group primary">
+    <button id="home" class="mini">Home</button>
     <input id="url" placeholder="Search or enter address"/>
     <button id="go" class="primary">Go</button>
   </div>
@@ -117,6 +141,7 @@
     <button id="extBtn">Extensions</button>
     <button id="bmBtn">Bookmarks</button>
     <button id="histBtn">History</button>
+    <button id="settingsBtn">Settings</button>
   </div>
 </div>
 
@@ -149,6 +174,11 @@
   <div class="row"><input id="p_bypass" placeholder="bypass rules (e.g. <-loopback>)"></div><br>
 
   <button id="proxyApply" style="width:100%;">Apply & Save (reload active tab)</button>
+  <div class="row" style="justify-content:space-between;align-items:center;margin-top:10px;">
+    <button id="proxyTest" class="mini">Test Proxy</button>
+    <span id="proxyStatus" class="status wait">Not tested</span>
+  </div>
+  <div id="proxyDetails" class="muted" style="margin-top:6px;"></div>
   <p class="muted">Settings are auto-saved to config.json.</p>
 </div>
 
@@ -232,6 +262,39 @@
   <div id="histList"></div>
 </div>
 
+<div id="settingsPanel" class="panel">
+  <div class="row" style="justify-content:space-between;">
+    <h3>Browser Settings</h3>
+    <button id="settingsClose" class="mini">✕</button>
+  </div>
+
+  <div class="row">
+    <label style="min-width:120px;">Home URL</label>
+    <input id="s_home" placeholder="https://duckduckgo.com">
+  </div><br>
+
+  <div class="row">
+    <label style="min-width:120px;">Search engine</label>
+    <select id="s_search">
+      <option value="duckduckgo">DuckDuckGo</option>
+      <option value="google">Google</option>
+      <option value="bing">Bing</option>
+    </select>
+  </div><br>
+
+  <div class="row">
+    <label style="min-width:120px;">Theme</label>
+    <select id="s_theme">
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </div>
+
+  <div class="hr"></div>
+  <button id="settingsApply" style="width:100%;">Save settings</button>
+  <p class="muted">Settings update the home page, search engine, and theme.</p>
+</div>
+
 <script>
   const tabsEl = document.getElementById("tabs");
   const viewsEl = document.getElementById("views");
@@ -253,6 +316,11 @@
       custom: "",
       suffix: ""
     },
+    settings: {
+      homeUrl: "https://duckduckgo.com",
+      searchEngine: "duckduckgo",
+      theme: "light"
+    },
     extensions: [],
     bookmarks: [],
     history: [],
@@ -266,10 +334,12 @@
     enrichIp: async () => ({ ok: false, error: "Geo service unavailable." })
   };
   window.CfgAPI = window.CfgAPI || {
-    get: async () => FALLBACK_CONFIG
+    get: async () => FALLBACK_CONFIG,
+    set: async () => ({ ok: false })
   };
   window.ProxyCtl = window.ProxyCtl || {
-    set: async () => ({ ok: false })
+    set: async () => ({ ok: false }),
+    test: async () => ({ ok: false })
   };
   window.UA = window.UA || {
     set: async () => ({ ok: false })
@@ -291,6 +361,19 @@
     add: async () => ({ ok: false }),
     clear: async () => ({ ok: false })
   };
+  window.TabAPI = window.TabAPI || {
+    create: async () => ({ ok: false }),
+    switch: async () => ({ ok: false }),
+    close: async () => ({ ok: false }),
+    navigate: async () => ({ ok: false }),
+    back: async () => ({ ok: false }),
+    forward: async () => ({ ok: false }),
+    reload: async () => ({ ok: false }),
+    devtools: async () => ({ ok: false }),
+    setIp: async () => ({ ok: false }),
+    resize: async () => ({ ok: false }),
+    onUpdate: () => {}
+  };
 
   const USER_AGENT_PRESETS = {
     "chrome-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -302,6 +385,7 @@
     "edge-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
   };
   let UA_CONFIG = { mode: "preset", preset: "chrome-win", custom: "", suffix: "" };
+  let SETTINGS_CONFIG = { homeUrl: "https://duckduckgo.com", searchEngine: "duckduckgo", theme: "light" };
 
   // ===== IP/Geo list in console =====
   window.__IP_GEO_LOG__ = window.__IP_GEO_LOG__ || [];
@@ -331,14 +415,26 @@
       .replaceAll("'","&#039;");
   }
 
+  function searchUrlForQuery(query){
+    const encoded = encodeURIComponent(query);
+    const engine = SETTINGS_CONFIG.searchEngine || "duckduckgo";
+    if (engine === "google") return `https://www.google.com/search?q=${encoded}`;
+    if (engine === "bing") return `https://www.bing.com/search?q=${encoded}`;
+    return `https://duckduckgo.com/?q=${encoded}`;
+  }
+
   function normalizeUrl(input){
     let u = (input || "").trim();
     if(!u) return "";
     if(!u.startsWith("http://") && !u.startsWith("https://")){
-      if (u.includes(" ")) return "https://www.google.com/search?q=" + encodeURIComponent(u);
+      if (u.includes(" ")) return searchUrlForQuery(u);
       u = "https://" + u;
     }
     return u;
+  }
+
+  function getHomeUrl(){
+    return SETTINGS_CONFIG.homeUrl || "https://duckduckgo.com";
   }
 
   function generateFingerprintHash(){
@@ -366,98 +462,11 @@
     return suffix ? `${base} ${suffix}` : base;
   }
 
-  function partitionForTab(tab){
-    return tab.incognito ? `temp:incog_${tab.id}` : `persist:tab_${tab.id}`;
-  }
-  function getWebview(tabId){ return document.getElementById("wv_" + tabId); }
   function getActiveTab(){ return tabs.find(t => t.id === activeId) || null; }
-  function activeWebview(){ const tab = getActiveTab(); return tab ? getWebview(tab.id) : null; }
-  function supportsWebview(view){
-    return !!view && typeof view.loadURL === "function";
-  }
-  function rewriteUrlForIframe(url){
-    try {
-      const parsed = new URL(url);
-      if (parsed.hostname.endsWith("google.com")) {
-        return "https://www.google.com/webhp?igu=1";
-      }
-    } catch {}
-    return url;
-  }
-  function findFallbackFrame(view){
-    if (!view) return null;
-    if (view.tagName === "IFRAME") return view;
-    if (typeof view.querySelector === "function") return view.querySelector("iframe");
-    return null;
-  }
-  function loadUrlInView(view, url){
-    if (!view || !url) return;
-    if (supportsWebview(view)) {
-      view.loadURL(url);
-      return;
-    }
-    const frame = findFallbackFrame(view);
-    if (frame) frame.src = rewriteUrlForIframe(url);
-  }
 
-  function applyUserAgentToWebview(wv, ua){
-    if (!wv || !ua) return;
-    if (typeof wv.setUserAgent === "function") {
-      wv.setUserAgent(ua);
-    } else {
-      wv.setAttribute("useragent", ua);
-    }
-  }
-
-  // Load Strong blocker code once
-  const PROTECTION_SCRIPTS = [
-    "webrtc_blocker.js",
-    "canvas_blocker.js",
-    "webgl_blocker.js",
-    "audio_blocker.js",
-    "battery_blocker.js",
-    "client_hints_blocker.js"
-  ];
-  let PROTECTION_CODE = null;
-  async function loadProtectionScriptsOnce(){
-    if (PROTECTION_CODE) return PROTECTION_CODE;
-    const loaded = [];
-    for (const script of PROTECTION_SCRIPTS) {
-      try {
-        const r = await fetch(`./${script}`);
-        const code = await r.text();
-        loaded.push({ script, code });
-      } catch (error) {
-        console.warn(`Unable to load ${script}`, error);
-      }
-    }
-    PROTECTION_CODE = loaded;
-    return PROTECTION_CODE;
-  }
-
-  function buildIPInjector(ip){
-    return `
-      (function(){
-        try{
-          window.__PUBLIC_IP__ = ${JSON.stringify(String(ip||""))};
-          window.__PUBLIC_IP_TS__ = Date.now();
-          console.log("[INJECT] IP injected:", window.__PUBLIC_IP__);
-        }catch(e){}
-      })();
-    `;
-  }
-
-  async function injectProtection(tab){
-    const wv = getWebview(tab.id);
-    if (!wv) return;
-    try{
-      const protections = await loadProtectionScriptsOnce();
-      for (const entry of protections) {
-        if (!entry.code) continue;
-        await wv.executeJavaScript(entry.code, true);
-      }
-      await wv.executeJavaScript(buildIPInjector(tab.ip || ""), true);
-    }catch(e){}
+  function loadUrlInView(tabId, url){
+    if (!tabId || !url) return;
+    window.TabAPI.navigate({ tabId, url });
   }
 
   // Tabs
@@ -486,23 +495,24 @@
     });
   }
 
-  function showOnlyActiveWebview(){
-    tabs.forEach(t => {
-      const wv = getWebview(t.id);
-      if (!wv) return;
-      wv.style.display = (t.id === activeId) ? "block" : "none";
-      if (wv.classList && wv.classList.contains("view-container")) {
-        const frame = findFallbackFrame(wv);
-        if (frame) frame.style.display = (t.id === activeId) ? "block" : "none";
-      }
-    });
+  function handleTabUpdate(payload){
+    if (!payload) return;
+    const tab = tabs.find(t => t.id === payload.tabId);
+    if (!tab) return;
+    if (payload.title) tab.title = payload.title;
+    if (payload.url) {
+      tab.src = payload.url;
+      if (tab.id === activeId) urlInput.value = payload.url;
+      window.HIST.add({ url: payload.url, title: tab.title || "" }).catch(() => {});
+    }
+    renderTabs();
   }
 
   function switchTab(id){
     activeId = id;
     const tab = getActiveTab();
     if (tab) urlInput.value = tab.src || "";
-    showOnlyActiveWebview();
+    window.TabAPI.switch(id);
     renderTabs();
   }
 
@@ -511,13 +521,12 @@
     if (idx === -1) return;
 
     const wasActive = (id === activeId);
-    const wv = getWebview(id);
-    if (wv) wv.remove();
+    window.TabAPI.close(id);
 
     tabs.splice(idx, 1);
 
     if (!tabs.length){
-      createTab({ incognito:false, url:"https://google.com" });
+      createTab({ incognito:false, url:getHomeUrl() });
       return;
     }
 
@@ -527,81 +536,26 @@
       urlInput.value = next.src || "";
     }
 
-    showOnlyActiveWebview();
     renderTabs();
   }
 
-  function attachWebviewEvents(tab){
-    const wv = getWebview(tab.id);
-    if (!wv || !supportsWebview(wv)) return;
-
-    wv.addEventListener("dom-ready", () => injectProtection(tab));
-    wv.addEventListener("did-finish-load", () => injectProtection(tab));
-
-    const navHandler = async (e) => {
-      tab.src = e.url;
-      if (tab.id === activeId) urlInput.value = e.url;
-      try { await window.HIST.add({ url: e.url, title: tab.title || "" }); } catch {}
-      injectProtection(tab);
-    };
-
-    wv.addEventListener("did-navigate", navHandler);
-    wv.addEventListener("did-navigate-in-page", navHandler);
-
-    wv.addEventListener("page-title-updated", async (e) => {
-      tab.title = e.title || tab.title;
-      renderTabs();
-      try { if (tab.src) await window.HIST.add({ url: tab.src, title: tab.title || "" }); } catch {}
-    });
-  }
-
-  function createWebviewForTab(tab){
-    const canUseWebview = typeof customElements !== "undefined" && customElements.get("webview");
-    if (canUseWebview) {
-      const wv = document.createElement("webview");
-      wv.id = "wv_" + tab.id;
-      wv.src = tab.src || "https://google.com";
-      wv.setAttribute("allowpopups", "true");
-      wv.partition = partitionForTab(tab);
-      applyUserAgentToWebview(wv, buildUserAgent(UA_CONFIG));
-      viewsEl.appendChild(wv);
-      attachWebviewEvents(tab);
-      return;
-    }
-    const container = document.createElement("div");
-    container.id = "wv_" + tab.id;
-    container.className = "view-container";
-    const banner = document.createElement("div");
-    banner.className = "fallback-banner";
-    banner.textContent = "Electron webview غير متاح هنا — يتم استخدام iframe للعرض. بعض المواقع قد تمنع العرض.";
-    const frame = document.createElement("iframe");
-    frame.className = "webview-fallback";
-    frame.src = rewriteUrlForIframe(tab.src || "https://google.com");
-    frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups");
-    container.appendChild(banner);
-    container.appendChild(frame);
-    viewsEl.appendChild(container);
-  }
-
-  function createTab({ incognito=false, url="https://google.com" } = {}){
+  function createTab({ incognito=false, url=getHomeUrl() } = {}){
     const id = Date.now() + Math.floor(Math.random()*999);
     const tab = { id, title: "New Tab", src: url, ip: "", incognito };
     tabs.push(tab);
-    createWebviewForTab(tab);
+    window.TabAPI.create({ tabId: id, incognito: tab.incognito, url: tab.src });
     switchTab(id);
     return tab;
   }
 
   // Navigation
   document.getElementById("go").onclick = ()=>{
-    const wv = activeWebview();
-    if (!wv) return;
+    const tab = getActiveTab();
+    if (!tab) return;
     const u = normalizeUrl(urlInput.value);
     if(!u) return;
-    loadUrlInView(wv, u);
-    const tab = getActiveTab();
-    if (tab) tab.src = u;
+    loadUrlInView(tab.id, u);
+    tab.src = u;
   };
   urlInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -610,19 +564,24 @@
     }
   });
 
-  document.getElementById("back").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.goBack(); };
-  document.getElementById("forward").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.goForward(); };
-  document.getElementById("reload").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.reload(); };
-  document.getElementById("devtools").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.openDevTools(); };
+  document.getElementById("back").onclick = ()=>{ if (activeId) window.TabAPI.back(activeId); };
+  document.getElementById("forward").onclick = ()=>{ if (activeId) window.TabAPI.forward(activeId); };
+  document.getElementById("reload").onclick = ()=>{ if (activeId) window.TabAPI.reload(activeId); };
+  document.getElementById("devtools").onclick = ()=>{ if (activeId) window.TabAPI.devtools(activeId); };
+  document.getElementById("home").onclick = ()=>{
+    if (!activeId) return;
+    loadUrlInView(activeId, getHomeUrl());
+  };
 
   async function onNewTab(incognito){
-    const tab = createTab({ incognito: !!incognito, url: "https://google.com" });
+    const tab = createTab({ incognito: !!incognito, url: getHomeUrl() });
 
     // 1) get IP from backend
     let info = null;
     try {
       info = await window.AutoIP.getIpForTab(tab.id);
       tab.ip = info.ip || "";
+      if (tab.ip) await window.TabAPI.setIp({ tabId: tab.id, ip: tab.ip });
     } catch (e) {
       tab.ip = "";
     }
@@ -640,7 +599,6 @@
     logIpGeo(entry);
 
     renderTabs();
-    await injectProtection(tab);
   }
 
   document.getElementById("newtab").onclick = () => onNewTab(false);
@@ -648,11 +606,72 @@
 
   // Proxy UI
   const proxyPanel = document.getElementById("proxyPanel");
+  const proxyStatusEl = document.getElementById("proxyStatus");
+  const proxyDetailsEl = document.getElementById("proxyDetails");
+  const proxyTestBtn = document.getElementById("proxyTest");
+  let lastProxyTest = null;
+
+  function collectProxyForm(){
+    return {
+      enabled: document.getElementById("p_enabled").checked,
+      scheme: document.getElementById("p_scheme").value,
+      host: document.getElementById("p_host").value.trim(),
+      port: Number(document.getElementById("p_port").value.trim() || 1080),
+      username: document.getElementById("p_user").value,
+      password: document.getElementById("p_pass").value,
+      bypass: document.getElementById("p_bypass").value.trim()
+    };
+  }
+
+  function renderProxyStatus(result){
+    if (!proxyStatusEl || !proxyDetailsEl) return;
+    if (!result){
+      proxyStatusEl.className = "status wait";
+      proxyStatusEl.textContent = "Not tested";
+      proxyDetailsEl.textContent = "";
+      return;
+    }
+    if (result.ok){
+      proxyStatusEl.className = "status ok";
+      proxyStatusEl.textContent = result.proxy?.enabled ? "Proxy OK" : "Direct OK";
+      const location = [result.country, result.cc].filter(Boolean).join(" ");
+      const detailParts = [
+        result.ip ? `IP ${result.ip}` : null,
+        location ? `· ${location}` : null,
+        result.elapsedMs ? `· ${result.elapsedMs} ms` : null
+      ].filter(Boolean);
+      proxyDetailsEl.textContent = detailParts.join(" ");
+      return;
+    }
+    proxyStatusEl.className = "status error";
+    proxyStatusEl.textContent = "Proxy error";
+    proxyDetailsEl.textContent = result.error || "Unknown error";
+  }
+
+  async function runProxyTest(){
+    if (!proxyTestBtn) return;
+    proxyTestBtn.disabled = true;
+    proxyStatusEl.className = "status wait";
+    proxyStatusEl.textContent = "Testing...";
+    proxyDetailsEl.textContent = "";
+    try {
+      const cfg = collectProxyForm();
+      const res = await window.ProxyCtl.test({ proxy: cfg });
+      lastProxyTest = { ...res, ts: Date.now() };
+      renderProxyStatus(res);
+    } catch (e) {
+      renderProxyStatus({ ok: false, error: String(e?.message || e) });
+    } finally {
+      proxyTestBtn.disabled = false;
+    }
+  }
   document.getElementById("proxyBtn").onclick = async ()=> {
     proxyPanel.style.display = (proxyPanel.style.display === "none" ? "block" : "none");
     if (proxyPanel.style.display === "block") await loadProxyUIFromConfig();
   };
   document.getElementById("proxyClose").onclick = () => proxyPanel.style.display = "none";
+
+  if (proxyTestBtn) proxyTestBtn.onclick = runProxyTest;
 
   async function loadProxyUIFromConfig(){
     const cfg = await window.CfgAPI.get();
@@ -664,22 +683,15 @@
     document.getElementById("p_user").value = p.username || "";
     document.getElementById("p_pass").value = p.password || "";
     document.getElementById("p_bypass").value = p.bypass || "";
+    renderProxyStatus(lastProxyTest);
   }
 
   document.getElementById("proxyApply").onclick = async () => {
-    const cfg = {
-      enabled: document.getElementById("p_enabled").checked,
-      scheme: document.getElementById("p_scheme").value,
-      host: document.getElementById("p_host").value.trim(),
-      port: Number(document.getElementById("p_port").value.trim() || 1080),
-      username: document.getElementById("p_user").value,
-      password: document.getElementById("p_pass").value,
-      bypass: document.getElementById("p_bypass").value.trim()
-    };
+    const cfg = collectProxyForm();
     await window.ProxyCtl.set(cfg);
-    const wv = activeWebview();
-    if (wv) wv.reload();
+    if (activeId) window.TabAPI.reload(activeId);
     await loadProxyUIFromConfig();
+    await runProxyTest();
   };
 
   // User-Agent UI
@@ -699,6 +711,8 @@
   async function loadUserAgentFromConfig(){
     const cfg = await window.CfgAPI.get();
     UA_CONFIG = cfg.userAgent || UA_CONFIG;
+    SETTINGS_CONFIG = cfg.settings || SETTINGS_CONFIG;
+    applyTheme(SETTINGS_CONFIG.theme);
     document.getElementById("ua_mode").value = UA_CONFIG.mode || "preset";
     uaPresetSelect.value = UA_CONFIG.preset || "chrome-win";
     document.getElementById("ua_custom").value = UA_CONFIG.custom || "";
@@ -729,16 +743,14 @@
     };
     const res = await window.UA.set(payload);
     if (res?.ok) UA_CONFIG = res.userAgent || payload;
-
-    const ua = buildUserAgent(UA_CONFIG);
-    tabs.forEach(t => {
-      const wv = getWebview(t.id);
-      if (wv) applyUserAgentToWebview(wv, ua);
-    });
-    const active = activeWebview();
-    if (active) active.reload();
+    if (activeId) window.TabAPI.reload(activeId);
     await loadUserAgentFromConfig();
   };
+
+  function applyTheme(theme){
+    const mode = theme === "dark" ? "dark" : "light";
+    document.body.classList.toggle("dark", mode === "dark");
+  }
 
   // Extensions UI
   const extPanel = document.getElementById("extPanel");
@@ -825,8 +837,7 @@
       </div>
     `;
     div.querySelector(".bmOpen").onclick = () => {
-      const wv = activeWebview();
-      if (wv && b.url) wv.loadURL(b.url);
+      if (activeId && b.url) loadUrlInView(activeId, b.url);
     };
     div.querySelector(".bmDel").onclick = async () => {
       await window.BM.remove({ url: b.url });
@@ -853,8 +864,7 @@
         <button class="del" title="Remove">✕</button>
       `;
       pill.onclick = () => {
-        const wv = activeWebview();
-        if (wv && b.url) wv.loadURL(b.url);
+        if (activeId && b.url) loadUrlInView(activeId, b.url);
       };
       pill.querySelector(".del").onclick = async (ev) => {
         ev.stopPropagation();
@@ -909,8 +919,7 @@
       </div>
     `;
     div.querySelector(".histOpen").onclick = () => {
-      const wv = activeWebview();
-      if (wv && h.url) loadUrlInView(wv, h.url);
+      if (activeId && h.url) loadUrlInView(activeId, h.url);
     };
     return div;
   }
@@ -923,12 +932,60 @@
     else list.forEach(h => histList.appendChild(histCard(h)));
   }
 
+  // Settings UI
+  const settingsPanel = document.getElementById("settingsPanel");
+  const settingsBtn = document.getElementById("settingsBtn");
+  const settingsClose = document.getElementById("settingsClose");
+  const settingsApply = document.getElementById("settingsApply");
+
+  async function loadSettingsFromConfig(){
+    const cfg = await window.CfgAPI.get();
+    SETTINGS_CONFIG = cfg.settings || SETTINGS_CONFIG;
+    document.getElementById("s_home").value = SETTINGS_CONFIG.homeUrl || "https://duckduckgo.com";
+    document.getElementById("s_search").value = SETTINGS_CONFIG.searchEngine || "duckduckgo";
+    document.getElementById("s_theme").value = SETTINGS_CONFIG.theme || "light";
+    applyTheme(SETTINGS_CONFIG.theme);
+  }
+
+  function collectSettings(){
+    return {
+      homeUrl: document.getElementById("s_home").value.trim(),
+      searchEngine: document.getElementById("s_search").value,
+      theme: document.getElementById("s_theme").value
+    };
+  }
+
+  if (settingsBtn) {
+    settingsBtn.onclick = async () => {
+      settingsPanel.style.display = (settingsPanel.style.display === "none" ? "block" : "none");
+      if (settingsPanel.style.display === "block") await loadSettingsFromConfig();
+    };
+  }
+  if (settingsClose) settingsClose.onclick = () => settingsPanel.style.display = "none";
+
+  if (settingsApply) {
+    settingsApply.onclick = async () => {
+      const payload = collectSettings();
+      const res = await window.CfgAPI.set(payload);
+      if (res?.ok) SETTINGS_CONFIG = res.settings || payload;
+      applyTheme(SETTINGS_CONFIG.theme);
+      if (activeId) window.TabAPI.reload(activeId);
+    };
+  }
+
   // Init
   (async () => {
-    await loadProtectionScriptsOnce();
     renderPresetOptions();
     await loadUserAgentFromConfig();
-    createTab({ incognito:false, url:"https://google.com" });
+    await loadSettingsFromConfig();
+    window.TabAPI.onUpdate(handleTabUpdate);
+    const viewsTop = Math.round(viewsEl.getBoundingClientRect().top || 0);
+    await window.TabAPI.resize({ topOffset: viewsTop });
+    window.addEventListener("resize", () => {
+      const topOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
+      window.TabAPI.resize({ topOffset });
+    });
+    createTab({ incognito:false, url: getHomeUrl() });
     renderTabs();
     await refreshBookmarks();
   })();

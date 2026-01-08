@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, net } = require("electron");
+const { app, BrowserWindow, BrowserView, ipcMain, dialog, net, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { fork } = require("child_process");
@@ -49,6 +49,11 @@ function defaultConfig() {
       custom: "",
       suffix: ""
     },
+    settings: {
+      homeUrl: "https://duckduckgo.com",
+      searchEngine: "duckduckgo",
+      theme: "light"
+    },
     extensions: [],
     bookmarks: [],
     history: [],
@@ -68,6 +73,7 @@ function readConfig() {
       ...cfg,
       proxy: { ...base.proxy, ...(cfg.proxy || {}) },
       userAgent: { ...base.userAgent, ...(cfg.userAgent || {}) },
+      settings: { ...base.settings, ...(cfg.settings || {}) },
       extensions: Array.isArray(cfg.extensions) ? cfg.extensions : base.extensions,
       bookmarks: Array.isArray(cfg.bookmarks) ? cfg.bookmarks : base.bookmarks,
       history: Array.isArray(cfg.history) ? cfg.history : base.history
@@ -91,6 +97,30 @@ function writeConfig(cfg) {
 }
 
 let CFG = defaultConfig();
+const REGISTERED_PARTITIONS = new Set();
+const PROXY_AUTH_BY_PARTITION = new Map();
+const TAB_VIEWS = new Map();
+const USER_AGENT_PRESETS = {
+  "chrome-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "chrome-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "chrome-linux": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  "firefox-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+  "firefox-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:128.0) Gecko/20100101 Firefox/128.0",
+  "safari-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+  "edge-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
+};
+const PROTECTION_SCRIPTS = [
+  "webrtc_blocker.js",
+  "canvas_blocker.js",
+  "webgl_blocker.js",
+  "audio_blocker.js",
+  "battery_blocker.js",
+  "client_hints_blocker.js"
+];
+let PROTECTION_CODE = null;
+let MAIN_WINDOW = null;
+let ACTIVE_TAB_ID = null;
+let VIEW_TOP_OFFSET = 142;
 
 /* =========================
    IP Fetch (api.myip.com)
@@ -195,6 +225,41 @@ function getNormalizedProxyConfig() {
   CFG.proxy = normalized;
   return normalized;
 }
+function buildProxyRules(proxyConfig) {
+  if (!proxyConfig.enabled) {
+    return { mode: "direct" };
+  }
+  const rule = `${proxyConfig.scheme}://${proxyConfig.host}:${proxyConfig.port}`;
+  const proxyRules = { proxyRules: rule };
+  if (proxyConfig.bypass) proxyRules.proxyBypassRules = proxyConfig.bypass;
+  return proxyRules;
+}
+
+async function applyProxyConfigToSession(ses, proxyConfig, logPrefix = "[PROXY]") {
+  try {
+    const proxyRules = buildProxyRules(proxyConfig);
+    await ses.setProxy(proxyRules);
+    const partitionKey = typeof ses.getPartition === "function" ? ses.getPartition() : "default";
+    if (proxyConfig.enabled && (proxyConfig.username || proxyConfig.password)) {
+      PROXY_AUTH_BY_PARTITION.set(partitionKey, {
+        username: proxyConfig.username || "",
+        password: proxyConfig.password || ""
+      });
+    } else {
+      PROXY_AUTH_BY_PARTITION.delete(partitionKey);
+    }
+    if (proxyConfig.enabled) {
+      console.log(logPrefix, "enabled:", proxyRules.proxyRules, proxyConfig.bypass ? `bypass=${proxyConfig.bypass}` : "");
+    } else {
+      console.log(logPrefix, "disabled (direct)");
+    }
+    return true;
+  } catch (e) {
+    console.warn(logPrefix, "setProxy failed:", e?.message || e);
+    return false;
+  }
+}
+
 
 /* =========================
    User Agent
@@ -214,6 +279,14 @@ function normalizeUserAgentConfig(input = {}, previous = {}) {
   return { mode, preset, custom, suffix };
 }
 
+function buildUserAgentString(cfg) {
+  const mode = cfg?.mode === "custom" ? "custom" : "preset";
+  const preset = USER_AGENT_PRESETS[cfg?.preset] || USER_AGENT_PRESETS["chrome-win"];
+  const base = mode === "custom" && cfg?.custom ? String(cfg.custom) : preset;
+  const suffix = String(cfg?.suffix || "").trim();
+  return suffix ? `${base} ${suffix}` : base;
+}
+
 function getNormalizedUserAgentConfig() {
   const current = CFG.userAgent || defaultConfig().userAgent;
   const normalized = normalizeUserAgentConfig(current, current);
@@ -221,22 +294,197 @@ function getNormalizedUserAgentConfig() {
   return normalized;
 }
 
+function normalizeSettingsConfig(input = {}, previous = {}) {
+  const base = defaultConfig().settings;
+  const homeUrl = String(input.homeUrl ?? previous.homeUrl ?? base.homeUrl).trim() || base.homeUrl;
+  const searchEngine = String(input.searchEngine ?? previous.searchEngine ?? base.searchEngine).trim() || base.searchEngine;
+  const themeValue = String(input.theme ?? previous.theme ?? base.theme).toLowerCase().trim();
+  const theme = themeValue === "dark" ? "dark" : "light";
+
+  return { homeUrl, searchEngine, theme };
+}
+
+function getNormalizedSettingsConfig() {
+  const current = CFG.settings || defaultConfig().settings;
+  const normalized = normalizeSettingsConfig(current, current);
+  CFG.settings = normalized;
+  return normalized;
+}
+
+function loadProtectionScriptsOnce() {
+  if (PROTECTION_CODE) return PROTECTION_CODE;
+  const loaded = [];
+  for (const script of PROTECTION_SCRIPTS) {
+    const scriptPath = path.join(__dirname, script);
+    try {
+      const code = fs.readFileSync(scriptPath, "utf-8");
+      loaded.push({ script, code });
+    } catch (error) {
+      console.warn(`[PROTECT] Unable to load ${script}`, error?.message || error);
+    }
+  }
+  PROTECTION_CODE = loaded;
+  return PROTECTION_CODE;
+}
+
+function buildIPInjector(ip) {
+  return `
+    (function(){
+      try{
+        window.__PUBLIC_IP__ = ${JSON.stringify(String(ip || ""))};
+        window.__PUBLIC_IP_TS__ = Date.now();
+        console.log("[INJECT] IP injected:", window.__PUBLIC_IP__);
+      }catch(e){}
+    })();
+  `;
+}
+
+async function injectProtectionIntoView(entry) {
+  if (!entry?.view?.webContents) return;
+  try {
+    const scripts = loadProtectionScriptsOnce();
+    for (const item of scripts) {
+      if (!item.code) continue;
+      await entry.view.webContents.executeJavaScript(item.code, true);
+    }
+    if (entry.ip) {
+      await entry.view.webContents.executeJavaScript(buildIPInjector(entry.ip), true);
+    }
+  } catch (error) {
+    console.warn("[PROTECT] inject failed:", error?.message || error);
+  }
+}
+
 async function applyProxyToSession(ses) {
   const p = getNormalizedProxyConfig();
+  await applyProxyConfigToSession(ses, p);
+}
 
-  if (!p.enabled) {
-    await ses.setProxy({ mode: "direct" });
-    console.log("[PROXY] disabled (direct)");
-    return;
+function applyUserAgentToView(view) {
+  if (!view?.webContents) return;
+  const ua = buildUserAgentString(getNormalizedUserAgentConfig());
+  view.webContents.setUserAgent(ua);
+}
+
+function applyUserAgentToAllViews() {
+  for (const entry of TAB_VIEWS.values()) {
+    applyUserAgentToView(entry.view);
+  }
+}
+
+function sendTabUpdate(tabId, payload) {
+  if (!MAIN_WINDOW || MAIN_WINDOW.isDestroyed()) return;
+  MAIN_WINDOW.webContents.send("tab:update", { tabId, ...payload });
+}
+
+function resizeActiveView() {
+  if (!MAIN_WINDOW || MAIN_WINDOW.isDestroyed() || !ACTIVE_TAB_ID) return;
+  const entry = TAB_VIEWS.get(ACTIVE_TAB_ID);
+  if (!entry?.view) return;
+  const bounds = MAIN_WINDOW.getContentBounds();
+  const height = Math.max(0, bounds.height - VIEW_TOP_OFFSET);
+  entry.view.setBounds({ x: 0, y: VIEW_TOP_OFFSET, width: bounds.width, height });
+}
+
+function setActiveTab(tabId) {
+  if (!MAIN_WINDOW || MAIN_WINDOW.isDestroyed()) return;
+  const entry = TAB_VIEWS.get(tabId);
+  if (!entry) return;
+  if (ACTIVE_TAB_ID && ACTIVE_TAB_ID !== tabId) {
+    const previous = TAB_VIEWS.get(ACTIVE_TAB_ID);
+    if (previous?.view) {
+      try { MAIN_WINDOW.removeBrowserView(previous.view); } catch {}
+    }
+  }
+  MAIN_WINDOW.addBrowserView(entry.view);
+  ACTIVE_TAB_ID = tabId;
+  resizeActiveView();
+}
+
+function createTabView(tabId, { incognito, url }) {
+  const partition = incognito ? `temp:incog_${tabId}` : `persist:tab_${tabId}`;
+  const ses = registerPartition(partition);
+  const view = new BrowserView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition,
+      webviewTag: false
+    }
+  });
+
+  const entry = { id: tabId, incognito: !!incognito, partition, view, ip: "" };
+  TAB_VIEWS.set(tabId, entry);
+
+  view.webContents.on("page-title-updated", (_event, title) => {
+    sendTabUpdate(tabId, { title });
+  });
+  view.webContents.on("did-navigate", (_event, navigationUrl) => {
+    sendTabUpdate(tabId, { url: navigationUrl });
+  });
+  view.webContents.on("did-navigate-in-page", (_event, navigationUrl) => {
+    sendTabUpdate(tabId, { url: navigationUrl });
+  });
+  view.webContents.on("dom-ready", () => injectProtectionIntoView(entry));
+  view.webContents.on("did-finish-load", () => injectProtectionIntoView(entry));
+
+  applyProxyToSession(ses);
+  applyUserAgentToView(view);
+
+  if (url) {
+    view.webContents.loadURL(url);
   }
 
-  const rule = `${p.scheme}://${p.host}:${p.port}`;
-  const proxyConfig = { proxyRules: rule };
-  if (p.bypass) proxyConfig.proxyBypassRules = p.bypass;
-
-  await ses.setProxy(proxyConfig);
-  console.log("[PROXY] enabled:", rule, p.bypass ? `bypass=${p.bypass}` : "");
+  return entry;
 }
+function registerPartition(partition) {
+  const normalized = String(partition || "").trim();
+  if (!normalized) return null;
+  if (!REGISTERED_PARTITIONS.has(normalized)) {
+    REGISTERED_PARTITIONS.add(normalized);
+  }
+  return session.fromPartition(normalized);
+}
+
+async function applyProxyToAllSessions() {
+  const tasks = [];
+  if (session.defaultSession) tasks.push(applyProxyToSession(session.defaultSession));
+  for (const partition of REGISTERED_PARTITIONS) {
+    const ses = session.fromPartition(partition);
+    tasks.push(applyProxyToSession(ses));
+  }
+  await Promise.allSettled(tasks);
+}
+
+async function testProxyConnectivity(proxyConfig) {
+  const normalized = normalizeProxyConfig(proxyConfig, CFG.proxy);
+  const partition = `temp:proxy_test_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const ses = session.fromPartition(partition);
+  const started = Date.now();
+
+  try {
+    await applyProxyConfigToSession(ses, normalized, "[PROXY][TEST]");
+    const data = await fetchJsonWithSession(ses, "https://api.myip.com");
+    return {
+      ok: true,
+      ip: data.ip,
+      country: data.country,
+      cc: data.cc,
+      elapsedMs: Date.now() - started,
+      proxy: { ...normalized, password: normalized.password ? "*****" : "" }
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: String(e?.message || e),
+      elapsedMs: Date.now() - started,
+      proxy: { ...normalized, password: normalized.password ? "*****" : "" }
+    };
+  } finally {
+    PROXY_AUTH_BY_PARTITION.delete(partition);
+  }
+}
+
 
 /* =========================
    Extensions load/unload
@@ -319,9 +567,10 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.js"),
-      webviewTag: true
+      webviewTag: false
     }
   });
+  MAIN_WINDOW = win;
 
   const ses = win.webContents.session;
 
@@ -374,6 +623,16 @@ async function createWindow() {
   // Proxy auth if needed
   app.on("login", (event, webContents, request, authInfo, callback) => {
     const p = getNormalizedProxyConfig();
+    if (authInfo && authInfo.isProxy) {
+      const ses = webContents?.session;
+      const partitionKey = ses && typeof ses.getPartition === "function" ? ses.getPartition() : "default";
+      const auth = PROXY_AUTH_BY_PARTITION.get(partitionKey);
+      if (auth) {
+        event.preventDefault();
+        callback(auth.username || "", auth.password || "");
+        return;
+      }
+    }
     if (authInfo && authInfo.isProxy && p.enabled) {
       event.preventDefault();
       callback(p.username || "", p.password || "");
@@ -385,6 +644,13 @@ async function createWindow() {
   await loadEnabledExtensions(ses);
 
   win.loadFile("index.html");
+
+  win.on("resize", () => {
+    resizeActiveView();
+  });
+  win.on("closed", () => {
+    MAIN_WINDOW = null;
+  });
 }
 
 /* =========================
@@ -394,6 +660,7 @@ app.whenReady().then(() => {
   CFG = readConfig();
   CFG.proxy = getNormalizedProxyConfig();
   CFG.userAgent = getNormalizedUserAgentConfig();
+  CFG.settings = getNormalizedSettingsConfig();
   writeConfig(CFG);
   startGeoService();
   createWindow();
@@ -433,14 +700,43 @@ ipcMain.handle("cfg:get", async () => {
   CFG = readConfig();
   CFG.proxy = getNormalizedProxyConfig();
   CFG.userAgent = getNormalizedUserAgentConfig();
+  CFG.settings = getNormalizedSettingsConfig();
   return {
     proxy: { ...CFG.proxy, password: CFG.proxy?.password ? "*****" : "" },
     userAgent: CFG.userAgent,
+    settings: CFG.settings,
     extensions: CFG.extensions || [],
     bookmarks: CFG.bookmarks || [],
     history: CFG.history || [],
     historyLimit: CFG.historyLimit || 500
   };
+});
+
+/* =========================
+   IPC: settings set
+   ========================= */
+ipcMain.handle("cfg:set", async (event, payload) => {
+  CFG = readConfig();
+  CFG.settings = normalizeSettingsConfig(payload, CFG.settings);
+  writeConfig(CFG);
+  return { ok: true, settings: CFG.settings };
+});
+
+/* =========================
+   IPC: session partition register
+   ========================= */
+ipcMain.handle("partition:register", async (event, partition) => {
+  const ses = registerPartition(partition);
+  if (ses) await applyProxyToSession(ses);
+  return { ok: true };
+});
+
+/* =========================
+   IPC: proxy test
+   ========================= */
+ipcMain.handle("proxy:test", async (event, payload) => {
+  const proxyConfig = payload?.proxy || payload || {};
+  return await testProxyConnectivity(proxyConfig);
 });
 
 /* =========================
@@ -452,6 +748,7 @@ ipcMain.handle("proxy:set", async (event, proxyConfig) => {
 
   writeConfig(CFG);
   await applyProxyToSession(event.sender.session);
+  await applyProxyToAllSessions();
 
   return { ok: true, proxy: { ...CFG.proxy, password: CFG.proxy.password ? "*****" : "" } };
 });
@@ -463,6 +760,7 @@ ipcMain.handle("ua:set", async (event, payload) => {
   CFG = readConfig();
   CFG.userAgent = normalizeUserAgentConfig(payload, CFG.userAgent);
   writeConfig(CFG);
+  applyUserAgentToAllViews();
   return { ok: true, userAgent: CFG.userAgent };
 });
 
@@ -625,5 +923,91 @@ ipcMain.handle("hist:add", async (event, payload) => {
   CFG.history = h.slice(0, Math.max(50, limit));
   writeConfig(CFG);
 
+  return { ok: true };
+});
+
+/* =========================
+   IPC: Tabs (BrowserView)
+   ========================= */
+ipcMain.handle("tab:create", async (event, payload) => {
+  const tabId = Number(payload?.tabId);
+  if (!Number.isFinite(tabId)) return { ok: false, error: "Invalid tab id" };
+  if (TAB_VIEWS.has(tabId)) return { ok: true };
+
+  const incognito = !!payload?.incognito;
+  const url = String(payload?.url || "");
+  createTabView(tabId, { incognito, url });
+  setActiveTab(tabId);
+  return { ok: true };
+});
+
+ipcMain.handle("tab:switch", async (event, tabId) => {
+  const id = Number(tabId);
+  setActiveTab(id);
+  return { ok: true };
+});
+
+ipcMain.handle("tab:close", async (event, tabId) => {
+  const id = Number(tabId);
+  const entry = TAB_VIEWS.get(id);
+  if (!entry) return { ok: true };
+  if (ACTIVE_TAB_ID === id && MAIN_WINDOW && entry.view) {
+    try { MAIN_WINDOW.removeBrowserView(entry.view); } catch {}
+    ACTIVE_TAB_ID = null;
+  }
+  try { entry.view?.webContents?.destroy(); } catch {}
+  TAB_VIEWS.delete(id);
+  return { ok: true };
+});
+
+ipcMain.handle("tab:navigate", async (event, payload) => {
+  const id = Number(payload?.tabId);
+  const url = String(payload?.url || "");
+  const entry = TAB_VIEWS.get(id);
+  if (!entry || !url) return { ok: false };
+  entry.view.webContents.loadURL(url);
+  return { ok: true };
+});
+
+ipcMain.handle("tab:back", async (event, tabId) => {
+  const entry = TAB_VIEWS.get(Number(tabId));
+  if (entry?.view?.webContents?.canGoBack()) entry.view.webContents.goBack();
+  return { ok: true };
+});
+
+ipcMain.handle("tab:forward", async (event, tabId) => {
+  const entry = TAB_VIEWS.get(Number(tabId));
+  if (entry?.view?.webContents?.canGoForward()) entry.view.webContents.goForward();
+  return { ok: true };
+});
+
+ipcMain.handle("tab:reload", async (event, tabId) => {
+  const entry = TAB_VIEWS.get(Number(tabId));
+  if (entry?.view?.webContents) entry.view.webContents.reload();
+  return { ok: true };
+});
+
+ipcMain.handle("tab:devtools", async (event, tabId) => {
+  const entry = TAB_VIEWS.get(Number(tabId));
+  if (entry?.view?.webContents) entry.view.webContents.openDevTools({ mode: "detach" });
+  return { ok: true };
+});
+
+ipcMain.handle("tab:set-ip", async (event, payload) => {
+  const id = Number(payload?.tabId);
+  const ip = String(payload?.ip || "");
+  const entry = TAB_VIEWS.get(id);
+  if (!entry) return { ok: false };
+  entry.ip = ip;
+  await injectProtectionIntoView(entry);
+  return { ok: true };
+});
+
+ipcMain.handle("tab:resize", async (event, payload) => {
+  const offset = Number(payload?.topOffset);
+  if (Number.isFinite(offset) && offset >= 0) {
+    VIEW_TOP_OFFSET = offset;
+    resizeActiveView();
+  }
   return { ok: true };
 });

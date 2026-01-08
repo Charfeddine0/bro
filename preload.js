@@ -9,11 +9,13 @@ contextBridge.exposeInMainWorld("GeoAPI", {
 });
 
 contextBridge.exposeInMainWorld("CfgAPI", {
-  get: () => ipcRenderer.invoke("cfg:get")
+  get: () => ipcRenderer.invoke("cfg:get"),
+  set: (payload) => ipcRenderer.invoke("cfg:set", payload)
 });
 
 contextBridge.exposeInMainWorld("ProxyCtl", {
-  set: (cfg) => ipcRenderer.invoke("proxy:set", cfg)
+  set: (cfg) => ipcRenderer.invoke("proxy:set", cfg),
+  test: (payload) => ipcRenderer.invoke("proxy:test", payload)
 });
 
 contextBridge.exposeInMainWorld("UA", {
@@ -38,4 +40,22 @@ contextBridge.exposeInMainWorld("HIST", {
   list: () => ipcRenderer.invoke("hist:list"),
   add: (payload) => ipcRenderer.invoke("hist:add", payload),
   clear: () => ipcRenderer.invoke("hist:clear")
+});
+
+contextBridge.exposeInMainWorld("TabAPI", {
+  create: (payload) => ipcRenderer.invoke("tab:create", payload),
+  switch: (tabId) => ipcRenderer.invoke("tab:switch", tabId),
+  close: (tabId) => ipcRenderer.invoke("tab:close", tabId),
+  navigate: (payload) => ipcRenderer.invoke("tab:navigate", payload),
+  back: (tabId) => ipcRenderer.invoke("tab:back", tabId),
+  forward: (tabId) => ipcRenderer.invoke("tab:forward", tabId),
+  reload: (tabId) => ipcRenderer.invoke("tab:reload", tabId),
+  devtools: (tabId) => ipcRenderer.invoke("tab:devtools", tabId),
+  setIp: (payload) => ipcRenderer.invoke("tab:set-ip", payload),
+  resize: (payload) => ipcRenderer.invoke("tab:resize", payload),
+  onUpdate: (handler) => {
+    ipcRenderer.on("tab:update", (_event, payload) => {
+      if (typeof handler === "function") handler(payload);
+    });
+  }
 });
