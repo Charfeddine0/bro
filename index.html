@@ -4,26 +4,51 @@
   <meta charset="utf-8"/>
   <title>MyBrowser</title>
   <style>
-    body{margin:0;font-family:sans-serif;background:#fff}
-    #top{display:flex;gap:6px;padding:8px;background:#f3f3f3;align-items:center;border-bottom:1px solid #ddd}
-    #tabs{display:flex;gap:6px;padding:6px;background:#eaeaea;overflow:auto;border-bottom:1px solid #ddd}
-    .tab{
-      padding:6px 10px;background:#fff;border:1px solid #ccc;border-radius:10px;cursor:pointer;
-      display:flex;gap:8px;align-items:center;white-space:nowrap
+    :root{
+      --bg:#0f172a;
+      --panel:#111827;
+      --surface:#ffffff;
+      --muted:#6b7280;
+      --accent:#2563eb;
+      --accent-soft:#dbeafe;
+      --border:#e5e7eb;
+      --shadow:0 10px 24px rgba(15,23,42,.15);
     }
-    .tab.active{background:#dbeafe;border-color:#93c5fd}
-    .tab small{opacity:.75;font-family:monospace}
+    body{margin:0;font-family:Inter,system-ui,Arial,sans-serif;background:#f8fafc;color:#111827}
+    #top{
+      display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px;
+      background:linear-gradient(135deg,#0f172a,#1e293b);
+      align-items:center;border-bottom:1px solid #0f172a;color:#f8fafc
+    }
+    .toolbar-group{display:flex;gap:6px;align-items:center;background:rgba(255,255,255,.08);padding:6px;border-radius:14px}
+    .toolbar-group.primary{flex:1;min-width:260px}
+    #tabs{display:flex;gap:6px;padding:8px 10px;background:#f1f5f9;overflow:auto;border-bottom:1px solid var(--border)}
+    .tab{
+      padding:6px 10px;background:#fff;border:1px solid var(--border);border-radius:12px;cursor:pointer;
+      display:flex;gap:8px;align-items:center;white-space:nowrap;box-shadow:0 2px 6px rgba(15,23,42,.08)
+    }
+    .tab.active{background:var(--accent-soft);border-color:#93c5fd}
+    .tab small{opacity:.75;font-family:ui-monospace,Menlo,monospace}
     .tab .x{border:none;background:transparent;cursor:pointer;font-size:14px;padding:0 4px;opacity:.7}
     .tab .x:hover{opacity:1}
 
-    #url{flex:1;padding:8px;border:1px solid #ccc;border-radius:10px}
-    button{padding:7px 10px;border:1px solid #ccc;border-radius:10px;cursor:pointer;background:#fff}
-    button:hover{background:#f8f8f8}
-    .mini{padding:6px 8px;border-radius:10px}
+    #url{
+      flex:1;padding:10px 12px;border:1px solid transparent;border-radius:12px;
+      background:rgba(255,255,255,.92);outline:none;color:#0f172a
+    }
+    #url:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.3)}
+    button{
+      padding:7px 12px;border:1px solid rgba(148,163,184,.6);border-radius:12px;
+      cursor:pointer;background:#fff;color:#0f172a;font-weight:600
+    }
+    button:hover{background:#f1f5f9}
+    button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    button.primary:hover{background:#1d4ed8}
+    .mini{padding:6px 10px;border-radius:10px;font-size:12px}
 
     #bmbar{
       display:flex; gap:8px; align-items:center;
-      padding:6px 10px; background:#fafafa; border-bottom:1px solid #e5e7eb;
+      padding:8px 12px; background:#fff; border-bottom:1px solid var(--border);
       overflow:auto; white-space:nowrap;
     }
     .bmitem{
@@ -36,43 +61,55 @@
     .bmitem .del{border:none;background:transparent;cursor:pointer;opacity:.6}
     .bmitem .del:hover{opacity:1}
 
-    #views{width:100vw;height:calc(100vh - 128px);position:relative;}
+    #views{width:100vw;height:calc(100vh - 142px);position:relative;background:#0b1220}
     webview{width:100%;height:100%;display:none;}
 
     .panel{
-      display:none; position:fixed; top:52px; right:10px; width:380px;
-      background:#fff; border:1px solid #ddd; box-shadow:0 6px 18px rgba(0,0,0,.15);
-      padding:10px; border-radius:12px; z-index:99999;
+      display:none; position:fixed; top:72px; right:14px; width:400px;
+      background:#fff; border:1px solid var(--border); box-shadow:var(--shadow);
+      padding:14px; border-radius:16px; z-index:99999;
       max-height: 80vh; overflow:auto;
     }
     .panel h3{margin:0 0 10px 0; font-size:14px;}
     .row{display:flex; gap:8px; align-items:center;}
-    .row input{flex:1;padding:8px;border:1px solid #ccc;border-radius:10px;}
+    .row input,.row select{flex:1;padding:8px;border:1px solid #cbd5f5;border-radius:10px;}
+    .row label{font-size:12px;color:var(--muted)}
     .hr{height:1px;background:#eee;margin:10px 0;}
 
-    .item{border:1px solid #eee;border-radius:12px;padding:8px;margin:6px 0;}
+    .item{border:1px solid var(--border);border-radius:12px;padding:10px;margin:8px 0;}
     .item .name{font-weight:700}
     .muted{opacity:.75;font-size:12px; word-break:break-all}
     .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;}
+    .badge{padding:4px 8px;border-radius:999px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700}
   </style>
 </head>
 <body>
 
 <div id="top">
-  <button id="back">←</button>
-  <button id="forward">→</button>
-  <button id="reload">⟳</button>
-  <input id="url" placeholder="https://example.com"/>
-  <button id="go">Go</button>
+  <div class="toolbar-group">
+    <button id="back">←</button>
+    <button id="forward">→</button>
+    <button id="reload">⟳</button>
+  </div>
 
-  <button id="newtab">＋</button>
-  <button id="newIncog">🕶️</button>
+  <div class="toolbar-group primary">
+    <input id="url" placeholder="Search or enter address"/>
+    <button id="go" class="primary">Go</button>
+  </div>
 
-  <button id="devtools">Dev</button>
-  <button id="proxyBtn">Proxy</button>
-  <button id="extBtn">Extensions</button>
-  <button id="bmBtn">Bookmarks</button>
-  <button id="histBtn">History</button>
+  <div class="toolbar-group">
+    <button id="newtab">＋</button>
+    <button id="newIncog">🕶️</button>
+  </div>
+
+  <div class="toolbar-group">
+    <button id="devtools">Dev</button>
+    <button id="proxyBtn">Proxy</button>
+    <button id="uaBtn">User-Agent</button>
+    <button id="extBtn">Extensions</button>
+    <button id="bmBtn">Bookmarks</button>
+    <button id="histBtn">History</button>
+  </div>
 </div>
 
 <div id="bmbar"></div>
@@ -81,20 +118,64 @@
 
 <div id="proxyPanel" class="panel">
   <div class="row" style="justify-content:space-between;">
-    <h3>SOCKS5 Proxy</h3>
+    <h3>Proxy Settings</h3>
     <button id="proxyClose" class="mini">✕</button>
   </div>
 
   <label><input type="checkbox" id="p_enabled"> Enabled</label>
   <div class="hr"></div>
 
+  <div class="row">
+    <select id="p_scheme">
+      <option value="http">HTTP</option>
+      <option value="https">HTTPS</option>
+      <option value="socks4">SOCKS4</option>
+      <option value="socks5">SOCKS5</option>
+      <option value="socks5h">SOCKS5 (DNS over proxy)</option>
+    </select>
+  </div><br>
   <div class="row"><input id="p_host" placeholder="host (e.g. 127.0.0.1)"></div><br>
   <div class="row"><input id="p_port" placeholder="port (e.g. 1080)"></div><br>
   <div class="row"><input id="p_user" placeholder="username (optional)"></div><br>
   <div class="row"><input id="p_pass" placeholder="password (optional)" type="password"></div><br>
+  <div class="row"><input id="p_bypass" placeholder="bypass rules (e.g. <-loopback>)"></div><br>
 
   <button id="proxyApply" style="width:100%;">Apply & Save (reload active tab)</button>
   <p class="muted">Settings are auto-saved to config.json.</p>
+</div>
+
+<div id="uaPanel" class="panel">
+  <div class="row" style="justify-content:space-between;">
+    <h3>User-Agent</h3>
+    <button id="uaClose" class="mini">✕</button>
+  </div>
+
+  <div class="row">
+    <label style="min-width:80px;">Mode</label>
+    <select id="ua_mode">
+      <option value="preset">Preset</option>
+      <option value="custom">Custom</option>
+    </select>
+  </div><br>
+
+  <div class="row">
+    <label style="min-width:80px;">Preset</label>
+    <select id="ua_preset"></select>
+  </div><br>
+
+  <div class="row">
+    <label style="min-width:80px;">Custom</label>
+    <input id="ua_custom" placeholder="Paste custom UA string">
+  </div><br>
+
+  <div class="row">
+    <label style="min-width:80px;">Add-on</label>
+    <input id="ua_suffix" placeholder="Optional suffix (e.g. MyBrowser/1.0)">
+  </div>
+
+  <div class="hr"></div>
+  <button id="uaApply" style="width:100%;">Apply to tabs (reload active tab)</button>
+  <p class="muted">Choose a preset or custom UA, then optionally append a suffix for add-ons.</p>
 </div>
 
 <div id="extPanel" class="panel">
@@ -149,6 +230,17 @@
   const bmbarEl = document.getElementById("bmbar");
   const urlInput = document.getElementById("url");
 
+  const USER_AGENT_PRESETS = {
+    "chrome-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "chrome-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "chrome-linux": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "firefox-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "firefox-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13.6; rv:128.0) Gecko/20100101 Firefox/128.0",
+    "safari-mac": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "edge-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
+  };
+  let UA_CONFIG = { mode: "preset", preset: "chrome-win", custom: "", suffix: "" };
+
   // ===== IP/Geo list in console =====
   window.__IP_GEO_LOG__ = window.__IP_GEO_LOG__ || [];
   function logIpGeo(entry){
@@ -187,12 +279,29 @@
     return u;
   }
 
+  function buildUserAgent(cfg){
+    const mode = cfg?.mode === "custom" ? "custom" : "preset";
+    const preset = USER_AGENT_PRESETS[cfg?.preset] || USER_AGENT_PRESETS["chrome-win"];
+    const base = mode === "custom" && cfg?.custom ? String(cfg.custom) : preset;
+    const suffix = String(cfg?.suffix || "").trim();
+    return suffix ? `${base} ${suffix}` : base;
+  }
+
   function partitionForTab(tab){
     return tab.incognito ? `temp:incog_${tab.id}` : `persist:tab_${tab.id}`;
   }
   function getWebview(tabId){ return document.getElementById("wv_" + tabId); }
   function getActiveTab(){ return tabs.find(t => t.id === activeId) || null; }
   function activeWebview(){ const tab = getActiveTab(); return tab ? getWebview(tab.id) : null; }
+
+  function applyUserAgentToWebview(wv, ua){
+    if (!wv || !ua) return;
+    if (typeof wv.setUserAgent === "function") {
+      wv.setUserAgent(ua);
+    } else {
+      wv.setAttribute("useragent", ua);
+    }
+  }
 
   // Load Strong blocker code once
   let WEBRTC_BLOCKER_CODE = "";
@@ -322,6 +431,7 @@
     wv.src = tab.src || "https://google.com";
     wv.setAttribute("allowpopups", "true");
     wv.partition = partitionForTab(tab);
+    applyUserAgentToWebview(wv, buildUserAgent(UA_CONFIG));
     viewsEl.appendChild(wv);
     attachWebviewEvents(tab);
   }
@@ -398,24 +508,86 @@
     const cfg = await window.CfgAPI.get();
     const p = cfg.proxy || {};
     document.getElementById("p_enabled").checked = !!p.enabled;
+    document.getElementById("p_scheme").value = p.scheme || "socks5";
     document.getElementById("p_host").value = p.host || "";
     document.getElementById("p_port").value = String(p.port || 1080);
     document.getElementById("p_user").value = p.username || "";
     document.getElementById("p_pass").value = p.password || "";
+    document.getElementById("p_bypass").value = p.bypass || "";
   }
 
   document.getElementById("proxyApply").onclick = async () => {
     const cfg = {
       enabled: document.getElementById("p_enabled").checked,
+      scheme: document.getElementById("p_scheme").value,
       host: document.getElementById("p_host").value.trim(),
       port: Number(document.getElementById("p_port").value.trim() || 1080),
       username: document.getElementById("p_user").value,
-      password: document.getElementById("p_pass").value
+      password: document.getElementById("p_pass").value,
+      bypass: document.getElementById("p_bypass").value.trim()
     };
-    await window.ProxyCtl.setSocks5(cfg);
+    await window.ProxyCtl.set(cfg);
     const wv = activeWebview();
     if (wv) wv.reload();
     await loadProxyUIFromConfig();
+  };
+
+  // User-Agent UI
+  const uaPanel = document.getElementById("uaPanel");
+  const uaPresetSelect = document.getElementById("ua_preset");
+
+  function renderPresetOptions(){
+    uaPresetSelect.innerHTML = "";
+    Object.entries(USER_AGENT_PRESETS).forEach(([key, value]) => {
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = `${key} · ${value.slice(0, 40)}…`;
+      uaPresetSelect.appendChild(opt);
+    });
+  }
+
+  async function loadUserAgentFromConfig(){
+    const cfg = await window.CfgAPI.get();
+    UA_CONFIG = cfg.userAgent || UA_CONFIG;
+    document.getElementById("ua_mode").value = UA_CONFIG.mode || "preset";
+    uaPresetSelect.value = UA_CONFIG.preset || "chrome-win";
+    document.getElementById("ua_custom").value = UA_CONFIG.custom || "";
+    document.getElementById("ua_suffix").value = UA_CONFIG.suffix || "";
+    toggleUaInputs();
+  }
+
+  function toggleUaInputs(){
+    const mode = document.getElementById("ua_mode").value;
+    const isCustom = mode === "custom";
+    document.getElementById("ua_custom").disabled = !isCustom;
+    uaPresetSelect.disabled = isCustom;
+  }
+
+  document.getElementById("uaBtn").onclick = async ()=> {
+    uaPanel.style.display = (uaPanel.style.display === "none" ? "block" : "none");
+    if (uaPanel.style.display === "block") await loadUserAgentFromConfig();
+  };
+  document.getElementById("uaClose").onclick = () => uaPanel.style.display = "none";
+  document.getElementById("ua_mode").onchange = toggleUaInputs;
+
+  document.getElementById("uaApply").onclick = async () => {
+    const payload = {
+      mode: document.getElementById("ua_mode").value,
+      preset: uaPresetSelect.value,
+      custom: document.getElementById("ua_custom").value.trim(),
+      suffix: document.getElementById("ua_suffix").value.trim()
+    };
+    const res = await window.UA.set(payload);
+    if (res?.ok) UA_CONFIG = res.userAgent || payload;
+
+    const ua = buildUserAgent(UA_CONFIG);
+    tabs.forEach(t => {
+      const wv = getWebview(t.id);
+      if (wv) applyUserAgentToWebview(wv, ua);
+    });
+    const active = activeWebview();
+    if (active) active.reload();
+    await loadUserAgentFromConfig();
   };
 
   // Extensions UI
@@ -604,6 +776,8 @@
   // Init
   (async () => {
     await loadWebrtcFileOnce();
+    renderPresetOptions();
+    await loadUserAgentFromConfig();
     createTab({ incognito:false, url:"https://google.com" });
     renderTabs();
     await refreshBookmarks();

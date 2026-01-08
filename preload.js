@@ -13,7 +13,11 @@ contextBridge.exposeInMainWorld("CfgAPI", {
 });
 
 contextBridge.exposeInMainWorld("ProxyCtl", {
-  setSocks5: (cfg) => ipcRenderer.invoke("proxy:set", cfg)
+  set: (cfg) => ipcRenderer.invoke("proxy:set", cfg)
+});
+
+contextBridge.exposeInMainWorld("UA", {
+  set: (payload) => ipcRenderer.invoke("ua:set", payload)
 });
 
 contextBridge.exposeInMainWorld("ExtAPI", {
