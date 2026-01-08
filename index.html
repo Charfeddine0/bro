@@ -14,18 +14,19 @@
       --border:#e5e7eb;
       --shadow:0 10px 24px rgba(15,23,42,.15);
     }
-    body{margin:0;font-family:Inter,system-ui,Arial,sans-serif;background:#f8fafc;color:#111827}
+    body{margin:0;font-family:Inter,system-ui,Arial,sans-serif;background:linear-gradient(180deg,#f8fafc 0%,#eef2ff 100%);color:#111827}
     #top{
       display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px;
       background:linear-gradient(135deg,#0f172a,#1e293b);
-      align-items:center;border-bottom:1px solid #0f172a;color:#f8fafc
+      align-items:center;border-bottom:1px solid #0f172a;color:#f8fafc;
+      position:sticky;top:0;z-index:10;box-shadow:0 10px 20px rgba(15,23,42,.22)
     }
     .toolbar-group{display:flex;gap:6px;align-items:center;background:rgba(255,255,255,.08);padding:6px;border-radius:14px}
     .toolbar-group.primary{flex:1;min-width:260px}
-    #tabs{display:flex;gap:6px;padding:8px 10px;background:#f1f5f9;overflow:auto;border-bottom:1px solid var(--border)}
+    #tabs{display:flex;gap:6px;padding:8px 10px;background:rgba(255,255,255,.7);backdrop-filter:blur(6px);overflow:auto;border-bottom:1px solid var(--border)}
     .tab{
-      padding:6px 10px;background:#fff;border:1px solid var(--border);border-radius:12px;cursor:pointer;
-      display:flex;gap:8px;align-items:center;white-space:nowrap;box-shadow:0 2px 6px rgba(15,23,42,.08)
+      padding:6px 12px;background:#fff;border:1px solid var(--border);border-radius:999px;cursor:pointer;
+      display:flex;gap:8px;align-items:center;white-space:nowrap;box-shadow:0 6px 14px rgba(15,23,42,.08)
     }
     .tab.active{background:var(--accent-soft);border-color:#93c5fd}
     .tab small{opacity:.75;font-family:ui-monospace,Menlo,monospace}
@@ -33,13 +34,13 @@
     .tab .x:hover{opacity:1}
 
     #url{
-      flex:1;padding:10px 12px;border:1px solid transparent;border-radius:12px;
+      flex:1;padding:10px 14px;border:1px solid transparent;border-radius:999px;
       background:rgba(255,255,255,.92);outline:none;color:#0f172a
     }
     #url:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.3)}
     button{
       padding:7px 12px;border:1px solid rgba(148,163,184,.6);border-radius:12px;
-      cursor:pointer;background:#fff;color:#0f172a;font-weight:600
+      cursor:pointer;background:#fff;color:#0f172a;font-weight:600;box-shadow:0 4px 10px rgba(15,23,42,.08)
     }
     button:hover{background:#f1f5f9}
     button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -63,6 +64,13 @@
 
     #views{width:100vw;height:calc(100vh - 142px);position:relative;background:#0b1220}
     webview{width:100%;height:100%;display:none;}
+    iframe.webview-fallback{width:100%;height:100%;border:0;display:none;background:#fff}
+    .view-container{width:100%;height:100%;display:none;position:relative;}
+    .fallback-banner{
+      position:absolute;top:12px;left:12px;right:12px;
+      background:rgba(15,23,42,.88);color:#f8fafc;padding:10px 12px;
+      border-radius:12px;font-size:12px;z-index:2;box-shadow:0 6px 16px rgba(15,23,42,.25)
+    }
 
     .panel{
       display:none; position:fixed; top:72px; right:14px; width:400px;
@@ -229,6 +237,60 @@
   const viewsEl = document.getElementById("views");
   const bmbarEl = document.getElementById("bmbar");
   const urlInput = document.getElementById("url");
+  const FALLBACK_CONFIG = {
+    proxy: {
+      enabled: false,
+      scheme: "socks5",
+      host: "127.0.0.1",
+      port: 1080,
+      username: "",
+      password: "",
+      bypass: "<-loopback>"
+    },
+    userAgent: {
+      mode: "preset",
+      preset: "chrome-win",
+      custom: "",
+      suffix: ""
+    },
+    extensions: [],
+    bookmarks: [],
+    history: [],
+    historyLimit: 500
+  };
+
+  window.AutoIP = window.AutoIP || {
+    getIpForTab: async () => ({ ip: "" })
+  };
+  window.GeoAPI = window.GeoAPI || {
+    enrichIp: async () => ({ ok: false, error: "Geo service unavailable." })
+  };
+  window.CfgAPI = window.CfgAPI || {
+    get: async () => FALLBACK_CONFIG
+  };
+  window.ProxyCtl = window.ProxyCtl || {
+    set: async () => ({ ok: false })
+  };
+  window.UA = window.UA || {
+    set: async () => ({ ok: false })
+  };
+  window.ExtAPI = window.ExtAPI || {
+    pickFolder: async () => null,
+    list: async () => ({ extensions: [] }),
+    add: async () => ({ ok: false }),
+    toggle: async () => ({ ok: false }),
+    remove: async () => ({ ok: false })
+  };
+  window.BM = window.BM || {
+    list: async () => ({ bookmarks: [] }),
+    add: async () => ({ ok: false }),
+    remove: async () => ({ ok: false })
+  };
+  window.HIST = window.HIST || {
+    list: async () => ({ history: [] }),
+    add: async () => ({ ok: false }),
+    clear: async () => ({ ok: false })
+  };
 
   const USER_AGENT_PRESETS = {
     "chrome-win": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -279,6 +341,23 @@
     return u;
   }
 
+  function generateFingerprintHash(){
+    const bytes = new Uint8Array(16);
+    if (window.crypto?.getRandomValues) {
+      window.crypto.getRandomValues(bytes);
+    } else {
+      for (let i = 0; i < bytes.length; i += 1) {
+        bytes[i] = Math.floor(Math.random() * 256);
+      }
+    }
+    return `fp_${Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  window.FINGERPRINTHASH = generateFingerprintHash();
+  window.HTTP2_FINGERPRINT = "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p";
+  window.AKAMAI_FINGERPRINT = "1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p";
+  window.AKAMAI_HASH = "52d84b11737d980aef856699f885ca86";
+
   function buildUserAgent(cfg){
     const mode = cfg?.mode === "custom" ? "custom" : "preset";
     const preset = USER_AGENT_PRESETS[cfg?.preset] || USER_AGENT_PRESETS["chrome-win"];
@@ -293,6 +372,33 @@
   function getWebview(tabId){ return document.getElementById("wv_" + tabId); }
   function getActiveTab(){ return tabs.find(t => t.id === activeId) || null; }
   function activeWebview(){ const tab = getActiveTab(); return tab ? getWebview(tab.id) : null; }
+  function supportsWebview(view){
+    return !!view && typeof view.loadURL === "function";
+  }
+  function rewriteUrlForIframe(url){
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname.endsWith("google.com")) {
+        return "https://www.google.com/webhp?igu=1";
+      }
+    } catch {}
+    return url;
+  }
+  function findFallbackFrame(view){
+    if (!view) return null;
+    if (view.tagName === "IFRAME") return view;
+    if (typeof view.querySelector === "function") return view.querySelector("iframe");
+    return null;
+  }
+  function loadUrlInView(view, url){
+    if (!view || !url) return;
+    if (supportsWebview(view)) {
+      view.loadURL(url);
+      return;
+    }
+    const frame = findFallbackFrame(view);
+    if (frame) frame.src = rewriteUrlForIframe(url);
+  }
 
   function applyUserAgentToWebview(wv, ua){
     if (!wv || !ua) return;
@@ -304,12 +410,29 @@
   }
 
   // Load Strong blocker code once
-  let WEBRTC_BLOCKER_CODE = "";
-  async function loadWebrtcFileOnce(){
-    if (WEBRTC_BLOCKER_CODE) return WEBRTC_BLOCKER_CODE;
-    const r = await fetch("./webrtc_blocker.js");
-    WEBRTC_BLOCKER_CODE = await r.text();
-    return WEBRTC_BLOCKER_CODE;
+  const PROTECTION_SCRIPTS = [
+    "webrtc_blocker.js",
+    "canvas_blocker.js",
+    "webgl_blocker.js",
+    "audio_blocker.js",
+    "battery_blocker.js",
+    "client_hints_blocker.js"
+  ];
+  let PROTECTION_CODE = null;
+  async function loadProtectionScriptsOnce(){
+    if (PROTECTION_CODE) return PROTECTION_CODE;
+    const loaded = [];
+    for (const script of PROTECTION_SCRIPTS) {
+      try {
+        const r = await fetch(`./${script}`);
+        const code = await r.text();
+        loaded.push({ script, code });
+      } catch (error) {
+        console.warn(`Unable to load ${script}`, error);
+      }
+    }
+    PROTECTION_CODE = loaded;
+    return PROTECTION_CODE;
   }
 
   function buildIPInjector(ip){
@@ -328,8 +451,11 @@
     const wv = getWebview(tab.id);
     if (!wv) return;
     try{
-      const strongCode = await loadWebrtcFileOnce();
-      await wv.executeJavaScript(strongCode, true);
+      const protections = await loadProtectionScriptsOnce();
+      for (const entry of protections) {
+        if (!entry.code) continue;
+        await wv.executeJavaScript(entry.code, true);
+      }
       await wv.executeJavaScript(buildIPInjector(tab.ip || ""), true);
     }catch(e){}
   }
@@ -365,6 +491,10 @@
       const wv = getWebview(t.id);
       if (!wv) return;
       wv.style.display = (t.id === activeId) ? "block" : "none";
+      if (wv.classList && wv.classList.contains("view-container")) {
+        const frame = findFallbackFrame(wv);
+        if (frame) frame.style.display = (t.id === activeId) ? "block" : "none";
+      }
     });
   }
 
@@ -403,7 +533,7 @@
 
   function attachWebviewEvents(tab){
     const wv = getWebview(tab.id);
-    if (!wv) return;
+    if (!wv || !supportsWebview(wv)) return;
 
     wv.addEventListener("dom-ready", () => injectProtection(tab));
     wv.addEventListener("did-finish-load", () => injectProtection(tab));
@@ -426,14 +556,32 @@
   }
 
   function createWebviewForTab(tab){
-    const wv = document.createElement("webview");
-    wv.id = "wv_" + tab.id;
-    wv.src = tab.src || "https://google.com";
-    wv.setAttribute("allowpopups", "true");
-    wv.partition = partitionForTab(tab);
-    applyUserAgentToWebview(wv, buildUserAgent(UA_CONFIG));
-    viewsEl.appendChild(wv);
-    attachWebviewEvents(tab);
+    const canUseWebview = typeof customElements !== "undefined" && customElements.get("webview");
+    if (canUseWebview) {
+      const wv = document.createElement("webview");
+      wv.id = "wv_" + tab.id;
+      wv.src = tab.src || "https://google.com";
+      wv.setAttribute("allowpopups", "true");
+      wv.partition = partitionForTab(tab);
+      applyUserAgentToWebview(wv, buildUserAgent(UA_CONFIG));
+      viewsEl.appendChild(wv);
+      attachWebviewEvents(tab);
+      return;
+    }
+    const container = document.createElement("div");
+    container.id = "wv_" + tab.id;
+    container.className = "view-container";
+    const banner = document.createElement("div");
+    banner.className = "fallback-banner";
+    banner.textContent = "Electron webview غير متاح هنا — يتم استخدام iframe للعرض. بعض المواقع قد تمنع العرض.";
+    const frame = document.createElement("iframe");
+    frame.className = "webview-fallback";
+    frame.src = rewriteUrlForIframe(tab.src || "https://google.com");
+    frame.setAttribute("referrerpolicy", "no-referrer");
+    frame.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups");
+    container.appendChild(banner);
+    container.appendChild(frame);
+    viewsEl.appendChild(container);
   }
 
   function createTab({ incognito=false, url="https://google.com" } = {}){
@@ -451,7 +599,9 @@
     if (!wv) return;
     const u = normalizeUrl(urlInput.value);
     if(!u) return;
-    wv.loadURL(u);
+    loadUrlInView(wv, u);
+    const tab = getActiveTab();
+    if (tab) tab.src = u;
   };
   urlInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") {
@@ -460,10 +610,10 @@
     }
   });
 
-  document.getElementById("back").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.goBack(); };
-  document.getElementById("forward").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.goForward(); };
-  document.getElementById("reload").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.reload(); };
-  document.getElementById("devtools").onclick = ()=>{ const wv=activeWebview(); if(wv) wv.openDevTools(); };
+  document.getElementById("back").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.goBack(); };
+  document.getElementById("forward").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.goForward(); };
+  document.getElementById("reload").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.reload(); };
+  document.getElementById("devtools").onclick = ()=>{ const wv=activeWebview(); if(wv && supportsWebview(wv)) wv.openDevTools(); };
 
   async function onNewTab(incognito){
     const tab = createTab({ incognito: !!incognito, url: "https://google.com" });
@@ -760,7 +910,7 @@
     `;
     div.querySelector(".histOpen").onclick = () => {
       const wv = activeWebview();
-      if (wv && h.url) wv.loadURL(h.url);
+      if (wv && h.url) loadUrlInView(wv, h.url);
     };
     return div;
   }
@@ -775,7 +925,7 @@
 
   // Init
   (async () => {
-    await loadWebrtcFileOnce();
+    await loadProtectionScriptsOnce();
     renderPresetOptions();
     await loadUserAgentFromConfig();
     createTab({ incognito:false, url:"https://google.com" });
