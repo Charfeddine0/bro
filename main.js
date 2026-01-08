@@ -7,6 +7,24 @@ const { fork } = require("child_process");
 app.commandLine.appendSwitch("force-webrtc-ip-handling-policy", "disable_non_proxied_udp");
 app.commandLine.appendSwitch("webrtc-hide-local-ips-with-mdns");
 
+// Randomize TLS profile on startup (best-effort for fingerprint variance).
+function applyRandomTlsProfile() {
+  const profiles = [
+    { name: "tls13-default" },
+    { name: "tls12-compat", min: "tls1.2", max: "tls1.2" },
+    { name: "tls13-strict", min: "tls1.2", max: "tls1.3", blacklist: "0x0005,0x000a" }
+  ];
+  const picked = profiles[Math.floor(Math.random() * profiles.length)];
+
+  if (picked.min) app.commandLine.appendSwitch("ssl-version-min", picked.min);
+  if (picked.max) app.commandLine.appendSwitch("ssl-version-max", picked.max);
+  if (picked.blacklist) app.commandLine.appendSwitch("cipher-suite-blacklist", picked.blacklist);
+
+  console.log("[TLS] profile:", picked.name);
+}
+
+applyRandomTlsProfile();
+
 /* =========================
    CONFIG (auto saved)
    ========================= */
@@ -24,6 +42,12 @@ function defaultConfig() {
       username: "",
       password: "",
       bypass: "<-loopback>"
+    },
+    userAgent: {
+      mode: "preset",
+      preset: "chrome-win",
+      custom: "",
+      suffix: ""
     },
     extensions: [],
     bookmarks: [],
@@ -43,6 +67,7 @@ function readConfig() {
       ...base,
       ...cfg,
       proxy: { ...base.proxy, ...(cfg.proxy || {}) },
+      userAgent: { ...base.userAgent, ...(cfg.userAgent || {}) },
       extensions: Array.isArray(cfg.extensions) ? cfg.extensions : base.extensions,
       bookmarks: Array.isArray(cfg.bookmarks) ? cfg.bookmarks : base.bookmarks,
       history: Array.isArray(cfg.history) ? cfg.history : base.history
@@ -119,7 +144,7 @@ async function getMyIp(ses) {
    Proxy
    ========================= */
 function normalizeProxyScheme(scheme) {
-  const allowed = new Set(["socks5", "socks5h", "http", "https"]);
+  const allowed = new Set(["socks4", "socks5", "socks5h", "http", "https"]);
   const value = String(scheme || "").toLowerCase().trim();
   return allowed.has(value) ? value : "socks5";
 }
@@ -168,6 +193,31 @@ function getNormalizedProxyConfig() {
   const current = CFG.proxy || defaultConfig().proxy;
   const normalized = normalizeProxyConfig(current, current);
   CFG.proxy = normalized;
+  return normalized;
+}
+
+/* =========================
+   User Agent
+   ========================= */
+function normalizeUserAgentMode(mode) {
+  const value = String(mode || "").toLowerCase().trim();
+  return value === "custom" ? "custom" : "preset";
+}
+
+function normalizeUserAgentConfig(input = {}, previous = {}) {
+  const base = defaultConfig().userAgent;
+  const mode = normalizeUserAgentMode(input.mode ?? previous.mode ?? base.mode);
+  const preset = String(input.preset ?? previous.preset ?? base.preset).trim() || base.preset;
+  const custom = String(input.custom ?? previous.custom ?? base.custom);
+  const suffix = String(input.suffix ?? previous.suffix ?? base.suffix).trim();
+
+  return { mode, preset, custom, suffix };
+}
+
+function getNormalizedUserAgentConfig() {
+  const current = CFG.userAgent || defaultConfig().userAgent;
+  const normalized = normalizeUserAgentConfig(current, current);
+  CFG.userAgent = normalized;
   return normalized;
 }
 
@@ -236,6 +286,11 @@ let GEO_CHILD = null;
 
 function startGeoService() {
   const childPath = path.join(__dirname, "geo_service.js");
+  const maxmindPath = path.join(__dirname, "node_modules", "maxmind");
+  if (!fs.existsSync(maxmindPath)) {
+    console.warn("[GEO] maxmind module not installed. Run `npm install` before starting the app.");
+    return;
+  }
   try {
     GEO_CHILD = fork(childPath, [], {
       stdio: "inherit",
@@ -338,6 +393,7 @@ async function createWindow() {
 app.whenReady().then(() => {
   CFG = readConfig();
   CFG.proxy = getNormalizedProxyConfig();
+  CFG.userAgent = getNormalizedUserAgentConfig();
   writeConfig(CFG);
   startGeoService();
   createWindow();
@@ -376,8 +432,10 @@ ipcMain.handle("geo:enrich-ip", async (event, ip) => {
 ipcMain.handle("cfg:get", async () => {
   CFG = readConfig();
   CFG.proxy = getNormalizedProxyConfig();
+  CFG.userAgent = getNormalizedUserAgentConfig();
   return {
     proxy: { ...CFG.proxy, password: CFG.proxy?.password ? "*****" : "" },
+    userAgent: CFG.userAgent,
     extensions: CFG.extensions || [],
     bookmarks: CFG.bookmarks || [],
     history: CFG.history || [],
@@ -396,6 +454,16 @@ ipcMain.handle("proxy:set", async (event, proxyConfig) => {
   await applyProxyToSession(event.sender.session);
 
   return { ok: true, proxy: { ...CFG.proxy, password: CFG.proxy.password ? "*****" : "" } };
+});
+
+/* =========================
+   IPC: user agent set
+   ========================= */
+ipcMain.handle("ua:set", async (event, payload) => {
+  CFG = readConfig();
+  CFG.userAgent = normalizeUserAgentConfig(payload, CFG.userAgent);
+  writeConfig(CFG);
+  return { ok: true, userAgent: CFG.userAgent };
 });
 
 /* =========================
