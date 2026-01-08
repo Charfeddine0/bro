@@ -4,7 +4,8 @@
   "main": "main.js",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "proxy:test": "node scripts/proxy_test.js"
   },
   "dependencies": {
     "maxmind": "^4.4.0"
