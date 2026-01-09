@@ -679,7 +679,7 @@
       proxyTestBtn.disabled = false;
     }
   }
-  const PANEL_INSET = 420;
+  const PANEL_GAP = 24;
   let currentTopOffset = 0;
 
   function hideAllPanels(except){
@@ -688,11 +688,24 @@
     });
   }
 
-  function updateViewInset(){
+  function getRightInset(){
     const openPanels = Array.from(document.querySelectorAll(".panel"))
-      .some(panel => panel.style.display === "block");
-    const rightInset = openPanels ? PANEL_INSET : 0;
-    window.TabAPI.resize({ topOffset: currentTopOffset, rightInset });
+      .filter(panel => panel.style.display === "block");
+    if (!openPanels.length) return 0;
+    const widths = openPanels.map(panel => panel.getBoundingClientRect().width || 0);
+    return Math.max(...widths, 0) + PANEL_GAP;
+  }
+
+  function updateViewInset(defer = false){
+    const apply = () => {
+      const rightInset = getRightInset();
+      window.TabAPI.resize({ topOffset: currentTopOffset, rightInset });
+    };
+    if (defer) {
+      requestAnimationFrame(apply);
+    } else {
+      apply();
+    }
   }
 
   function togglePanel(panelEl, onOpen){
@@ -700,7 +713,7 @@
     if (isHidden) hideAllPanels(panelEl);
     panelEl.style.display = isHidden ? "block" : "none";
     if (isHidden && onOpen) onOpen();
-    updateViewInset();
+    updateViewInset(isHidden);
   }
 
   document.getElementById("proxyBtn").onclick = () => {
