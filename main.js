@@ -28,8 +28,11 @@ applyRandomTlsProfile();
 /* =========================
    CONFIG (auto saved)
    ========================= */
-function configPath() {
-  return path.join(app.getPath("userData"), "config.json");
+function configPaths() {
+  return {
+    appPath: path.join(app.getAppPath(), "config.json"),
+    userPath: path.join(app.getPath("userData"), "config.json")
+  };
 }
 
 function defaultConfig() {
@@ -62,38 +65,54 @@ function defaultConfig() {
 }
 
 function readConfig() {
-  try {
-    const p = configPath();
-    if (!fs.existsSync(p)) return defaultConfig();
-    const raw = fs.readFileSync(p, "utf-8");
-    const cfg = JSON.parse(raw);
-    const base = defaultConfig();
-    return {
-      ...base,
-      ...cfg,
-      proxy: { ...base.proxy, ...(cfg.proxy || {}) },
-      userAgent: { ...base.userAgent, ...(cfg.userAgent || {}) },
-      settings: { ...base.settings, ...(cfg.settings || {}) },
-      extensions: Array.isArray(cfg.extensions) ? cfg.extensions : base.extensions,
-      bookmarks: Array.isArray(cfg.bookmarks) ? cfg.bookmarks : base.bookmarks,
-      history: Array.isArray(cfg.history) ? cfg.history : base.history
-    };
-  } catch (e) {
-    console.warn("[CFG] readConfig failed:", e);
-    return defaultConfig();
+  const base = defaultConfig();
+  const { appPath, userPath } = configPaths();
+  const paths = [appPath, userPath];
+  for (const p of paths) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const raw = fs.readFileSync(p, "utf-8");
+      const cfg = JSON.parse(raw);
+      return {
+        ...base,
+        ...cfg,
+        proxy: { ...base.proxy, ...(cfg.proxy || {}) },
+        userAgent: { ...base.userAgent, ...(cfg.userAgent || {}) },
+        settings: { ...base.settings, ...(cfg.settings || {}) },
+        extensions: Array.isArray(cfg.extensions) ? cfg.extensions : base.extensions,
+        bookmarks: Array.isArray(cfg.bookmarks) ? cfg.bookmarks : base.bookmarks,
+        history: Array.isArray(cfg.history) ? cfg.history : base.history
+      };
+    } catch (e) {
+      console.warn("[CFG] readConfig failed for", p, ":", e);
+    }
   }
+  return base;
 }
 
 function writeConfig(cfg) {
+  const { appPath, userPath } = configPaths();
+  const serialized = JSON.stringify(cfg, null, 2);
+  let saved = false;
+
   try {
-    const p = configPath();
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    fs.writeFileSync(p, JSON.stringify(cfg, null, 2), "utf-8");
-    return true;
+    fs.writeFileSync(appPath, serialized, "utf-8");
+    saved = true;
   } catch (e) {
-    console.warn("[CFG] writeConfig failed:", e);
-    return false;
+    console.warn("[CFG] writeConfig failed for appPath:", e?.message || e);
   }
+
+  if (!saved) {
+    try {
+      fs.mkdirSync(path.dirname(userPath), { recursive: true });
+      fs.writeFileSync(userPath, serialized, "utf-8");
+      saved = true;
+    } catch (e) {
+      console.warn("[CFG] writeConfig failed for userPath:", e?.message || e);
+    }
+  }
+
+  return saved;
 }
 
 let CFG = defaultConfig();
@@ -121,6 +140,7 @@ let PROTECTION_CODE = null;
 let MAIN_WINDOW = null;
 let ACTIVE_TAB_ID = null;
 let VIEW_TOP_OFFSET = 142;
+let VIEW_RIGHT_INSET = 0;
 
 /* =========================
    IP Fetch (api.myip.com)
@@ -383,7 +403,8 @@ function resizeActiveView() {
   if (!entry?.view) return;
   const bounds = MAIN_WINDOW.getContentBounds();
   const height = Math.max(0, bounds.height - VIEW_TOP_OFFSET);
-  entry.view.setBounds({ x: 0, y: VIEW_TOP_OFFSET, width: bounds.width, height });
+  const width = Math.max(0, bounds.width - VIEW_RIGHT_INSET);
+  entry.view.setBounds({ x: 0, y: VIEW_TOP_OFFSET, width, height });
 }
 
 function setActiveTab(tabId) {
@@ -1005,9 +1026,13 @@ ipcMain.handle("tab:set-ip", async (event, payload) => {
 
 ipcMain.handle("tab:resize", async (event, payload) => {
   const offset = Number(payload?.topOffset);
+  const rightInset = Number(payload?.rightInset);
   if (Number.isFinite(offset) && offset >= 0) {
     VIEW_TOP_OFFSET = offset;
-    resizeActiveView();
   }
+  if (Number.isFinite(rightInset) && rightInset >= 0) {
+    VIEW_RIGHT_INSET = rightInset;
+  }
+  resizeActiveView();
   return { ok: true };
 });
