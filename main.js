@@ -708,9 +708,11 @@ ipcMain.handle("get-ip-for-tab", async (event, tabId) => {
    IPC: external geo enrich
    ========================= */
 ipcMain.handle("geo:enrich-ip", async (event, ip) => {
-  const ses = MAIN_WINDOW?.webContents?.session || event.sender.session;
-  const data = await getMyIp(ses);
-  const serviceUrl = `http://127.0.0.1:8787/enrich?ip=${encodeURIComponent(String(data?.ip || ""))}`;
+  const targetIp = String(ip || "").trim();
+  if (!targetIp) {
+    throw new Error("Missing ip");
+  }
+  const serviceUrl = `http://127.0.0.1:8787/enrich?ip=${encodeURIComponent(targetIp)}`;
   const r = await fetch(serviceUrl);
   if (!r.ok) throw new Error("geo_service failed: " + r.status);
   return await r.json();
