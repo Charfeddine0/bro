@@ -679,10 +679,28 @@
       proxyTestBtn.disabled = false;
     }
   }
+  const PANEL_INSET = 420;
+  let currentTopOffset = 0;
+
+  function hideAllPanels(except){
+    document.querySelectorAll(".panel").forEach(panel => {
+      if (panel !== except) panel.style.display = "none";
+    });
+  }
+
+  function updateViewInset(){
+    const openPanels = Array.from(document.querySelectorAll(".panel"))
+      .some(panel => panel.style.display === "block");
+    const rightInset = openPanels ? PANEL_INSET : 0;
+    window.TabAPI.resize({ topOffset: currentTopOffset, rightInset });
+  }
+
   function togglePanel(panelEl, onOpen){
     const isHidden = window.getComputedStyle(panelEl).display === "none";
+    if (isHidden) hideAllPanels(panelEl);
     panelEl.style.display = isHidden ? "block" : "none";
     if (isHidden && onOpen) onOpen();
+    updateViewInset();
   }
 
   document.getElementById("proxyBtn").onclick = () => {
@@ -690,7 +708,10 @@
       await loadProxyUIFromConfig();
     });
   };
-  document.getElementById("proxyClose").onclick = () => proxyPanel.style.display = "none";
+  document.getElementById("proxyClose").onclick = () => {
+    proxyPanel.style.display = "none";
+    updateViewInset();
+  };
 
   if (proxyTestBtn) proxyTestBtn.onclick = runProxyTest;
 
@@ -753,7 +774,10 @@
       await loadUserAgentFromConfig();
     });
   };
-  document.getElementById("uaClose").onclick = () => uaPanel.style.display = "none";
+  document.getElementById("uaClose").onclick = () => {
+    uaPanel.style.display = "none";
+    updateViewInset();
+  };
   document.getElementById("ua_mode").onchange = toggleUaInputs;
 
   document.getElementById("uaApply").onclick = async () => {
@@ -782,7 +806,10 @@
       await refreshExtensions();
     });
   };
-  document.getElementById("extClose").onclick = () => extPanel.style.display = "none";
+  document.getElementById("extClose").onclick = () => {
+    extPanel.style.display = "none";
+    updateViewInset();
+  };
 
   function extCard(item){
     const div = document.createElement("div");
@@ -846,7 +873,10 @@
       await refreshBookmarks();
     });
   };
-  document.getElementById("bmClose").onclick = () => bmPanel.style.display = "none";
+  document.getElementById("bmClose").onclick = () => {
+    bmPanel.style.display = "none";
+    updateViewInset();
+  };
   document.getElementById("bmRefresh").onclick = refreshBookmarks;
 
   function bmCard(b){
@@ -918,7 +948,10 @@
       await refreshHistory();
     });
   };
-  document.getElementById("histClose").onclick = () => histPanel.style.display = "none";
+  document.getElementById("histClose").onclick = () => {
+    histPanel.style.display = "none";
+    updateViewInset();
+  };
   document.getElementById("histRefresh").onclick = refreshHistory;
 
   document.getElementById("histClear").onclick = async () => {
@@ -987,7 +1020,12 @@
       });
     };
   }
-  if (settingsClose) settingsClose.onclick = () => settingsPanel.style.display = "none";
+  if (settingsClose) {
+    settingsClose.onclick = () => {
+      settingsPanel.style.display = "none";
+      updateViewInset();
+    };
+  }
 
   if (settingsApply) {
     settingsApply.onclick = async () => {
@@ -1005,11 +1043,11 @@
     await loadUserAgentFromConfig();
     await loadSettingsFromConfig();
     window.TabAPI.onUpdate(handleTabUpdate);
-    const viewsTop = Math.round(viewsEl.getBoundingClientRect().top || 0);
-    await window.TabAPI.resize({ topOffset: viewsTop });
+    currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
+    await window.TabAPI.resize({ topOffset: currentTopOffset, rightInset: 0 });
     window.addEventListener("resize", () => {
-      const topOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
-      window.TabAPI.resize({ topOffset });
+      currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
+      updateViewInset();
     });
     createTab({ incognito:false, url: getHomeUrl() });
     renderTabs();

@@ -1,0 +1,26 @@
+{
+  "proxy": {
+    "enabled": false,
+    "scheme": "socks5",
+    "host": "127.0.0.1",
+    "port": 1080,
+    "username": "",
+    "password": "",
+    "bypass": "<-loopback>"
+  },
+  "userAgent": {
+    "mode": "preset",
+    "preset": "chrome-win",
+    "custom": "",
+    "suffix": ""
+  },
+  "settings": {
+    "homeUrl": "https://duckduckgo.com",
+    "searchEngine": "duckduckgo",
+    "theme": "light"
+  },
+  "extensions": [],
+  "bookmarks": [],
+  "history": [],
+  "historyLimit": 500
+}
