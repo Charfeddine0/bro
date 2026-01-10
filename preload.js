@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld("CfgAPI", {
   set: (payload) => ipcRenderer.invoke("cfg:set", payload)
 });
 
+contextBridge.exposeInMainWorld("HardeningAPI", {
+  apply: (payload) => ipcRenderer.invoke("hardening:apply", payload),
+  rollback: () => ipcRenderer.invoke("hardening:rollback")
+});
+
 contextBridge.exposeInMainWorld("ProxyCtl", {
   set: (cfg) => ipcRenderer.invoke("proxy:set", cfg),
   test: (payload) => ipcRenderer.invoke("proxy:test", payload)
