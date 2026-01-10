@@ -25,6 +25,28 @@ function applyRandomTlsProfile() {
 
 applyRandomTlsProfile();
 
+function formatError(error) {
+  if (!error) return "Unknown error";
+  if (typeof error === "string") return error;
+  if (error instanceof Error && error.message) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function handleIpc(channel, handler) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    try {
+      return await handler(event, ...args);
+    } catch (error) {
+      console.warn(`[IPC] ${channel} failed:`, error?.stack || error);
+      return { ok: false, error: formatError(error) };
+    }
+  });
+}
+
 /* =========================
    CONFIG (auto saved)
    ========================= */
@@ -159,6 +181,10 @@ async function fetchJsonWithSession(ses, url, timeoutMs = 10000) {
       res.on("data", (chunk) => chunks.push(chunk));
       res.on("end", () => {
         clearTimeout(timer);
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`request failed: ${res.statusCode}`));
+          return;
+        }
         const body = Buffer.concat(chunks).toString("utf-8");
         try {
           resolve(JSON.parse(body));
@@ -185,9 +211,13 @@ async function getMyIp(ses) {
     if (!ses) throw new Error("missing session");
     return await fetchJsonWithSession(ses, url);
   } catch (e) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
-    return await res.json(); // { ip, country, cc }
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
+      return await res.json(); // { ip, country, cc }
+    } catch (fallbackError) {
+      throw new Error(`api.myip.com request failed: ${formatError(fallbackError)}`);
+    }
   }
 }
 
@@ -258,6 +288,7 @@ function buildProxyRules(proxyConfig) {
 
 async function applyProxyConfigToSession(ses, proxyConfig, logPrefix = "[PROXY]") {
   try {
+    if (!ses) throw new Error("missing session");
     const proxyRules = buildProxyRules(proxyConfig);
     await ses.setProxy(proxyRules);
     const partitionKey = typeof ses.getPartition === "function" ? ses.getPartition() : "default";
@@ -378,7 +409,7 @@ async function injectProtectionIntoView(entry) {
 
 async function applyProxyToSession(ses) {
   const p = getNormalizedProxyConfig();
-  await applyProxyConfigToSession(ses, p);
+  return await applyProxyConfigToSession(ses, p);
 }
 
 function applyUserAgentToView(view) {
@@ -454,10 +485,6 @@ function createTabView(tabId, { incognito, url }) {
   applyProxyToSession(ses);
   applyUserAgentToView(view);
 
-  if (url) {
-    view.webContents.loadURL(url);
-  }
-
   return entry;
 }
 function registerPartition(partition) {
@@ -476,7 +503,12 @@ async function applyProxyToAllSessions() {
     const ses = session.fromPartition(partition);
     tasks.push(applyProxyToSession(ses));
   }
-  await Promise.allSettled(tasks);
+  const results = await Promise.allSettled(tasks);
+  const failures = results.reduce((total, result) => {
+    if (result.status === "rejected") return total + 1;
+    return result.value ? total : total + 1;
+  }, 0);
+  return { ok: failures === 0, failures };
 }
 
 async function testProxyConnectivity(proxyConfig) {
@@ -600,20 +632,24 @@ async function createWindow() {
   // ===== STRONG Anti-FP / Privacy hardening =====
 
   // 1) clear everything on startup
-  await ses.clearCache();
-  await ses.clearStorageData({
-    storages: [
-      "cookies",
-      "localstorage",
-      "sessionstorage",
-      "indexdb",
-      "cachestorage",
-      "serviceworkers",
-      "websql"
-    ],
-    quotas: ["temporary", "persistent", "syncable"]
-  });
-  console.log("[PRIVACY] cleared cache + storage on startup");
+  try {
+    await ses.clearCache();
+    await ses.clearStorageData({
+      storages: [
+        "cookies",
+        "localstorage",
+        "sessionstorage",
+        "indexdb",
+        "cachestorage",
+        "serviceworkers",
+        "websql"
+      ],
+      quotas: ["temporary", "persistent", "syncable"]
+    });
+    console.log("[PRIVACY] cleared cache + storage on startup");
+  } catch (error) {
+    console.warn("[PRIVACY] failed to clear cache/storage:", error?.message || error);
+  }
 
   // 2) block sensitive permissions
   ses.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -666,7 +702,9 @@ async function createWindow() {
   await applyProxyToSession(ses);
   await loadEnabledExtensions(ses);
 
-  win.loadFile("index.html");
+  win.loadFile("index.html").catch((error) => {
+    console.warn("[WINDOW] Failed to load index.html:", error?.message || error);
+  });
 
   win.on("resize", () => {
     resizeActiveView();
@@ -700,32 +738,35 @@ app.on("window-all-closed", () => {
 /* =========================
    IPC: IP for tab
    ========================= */
-ipcMain.handle("get-ip-for-tab", async (event, tabId) => {
-  const entry = TAB_VIEWS.get(Number(tabId));
+handleIpc("get-ip-for-tab", async (event, tabId) => {
+  const resolvedId = Number(tabId);
+  if (!Number.isFinite(resolvedId)) return { ok: false, error: "Invalid tab id" };
+  const entry = TAB_VIEWS.get(resolvedId);
   const ses = entry?.view?.webContents?.session || event.sender.session;
+  if (!ses) return { ok: false, error: "Missing session" };
   const data = await getMyIp(ses);
-  console.log("[BACKEND] New tab:", tabId, "IP:", data.ip, "Country:", data.country, data.cc);
-  return { tabId, ...data };
+  console.log("[BACKEND] New tab:", resolvedId, "IP:", data.ip, "Country:", data.country, data.cc);
+  return { ok: true, tabId: resolvedId, ...data };
 });
 
 /* =========================
    IPC: external geo enrich
    ========================= */
-ipcMain.handle("geo:enrich-ip", async (event, ip) => {
+handleIpc("geo:enrich-ip", async (event, ip) => {
   const targetIp = String(ip || "").trim();
   if (!targetIp) {
-    throw new Error("Missing ip");
+    return { ok: false, error: "Missing ip" };
   }
   const serviceUrl = `http://127.0.0.1:8787/enrich?ip=${encodeURIComponent(targetIp)}`;
   const r = await fetch(serviceUrl);
-  if (!r.ok) throw new Error("geo_service failed: " + r.status);
+  if (!r.ok) return { ok: false, error: "geo_service failed: " + r.status };
   return await r.json();
 });
 
 /* =========================
    IPC: config get
    ========================= */
-ipcMain.handle("cfg:get", async () => {
+handleIpc("cfg:get", async () => {
   CFG = readConfig();
   CFG.proxy = getNormalizedProxyConfig();
   CFG.userAgent = getNormalizedUserAgentConfig();
@@ -744,26 +785,28 @@ ipcMain.handle("cfg:get", async () => {
 /* =========================
    IPC: settings set
    ========================= */
-ipcMain.handle("cfg:set", async (event, payload) => {
+handleIpc("cfg:set", async (event, payload) => {
   CFG = readConfig();
   CFG.settings = normalizeSettingsConfig(payload, CFG.settings);
-  writeConfig(CFG);
+  const saved = writeConfig(CFG);
+  if (!saved) return { ok: false, error: "Failed to save config." };
   return { ok: true, settings: CFG.settings };
 });
 
 /* =========================
    IPC: session partition register
    ========================= */
-ipcMain.handle("partition:register", async (event, partition) => {
+handleIpc("partition:register", async (event, partition) => {
   const ses = registerPartition(partition);
-  if (ses) await applyProxyToSession(ses);
-  return { ok: true };
+  if (!ses) return { ok: false, error: "Invalid partition" };
+  const applied = await applyProxyToSession(ses);
+  return applied ? { ok: true } : { ok: false, error: "Failed to apply proxy to partition." };
 });
 
 /* =========================
    IPC: proxy test
    ========================= */
-ipcMain.handle("proxy:test", async (event, payload) => {
+handleIpc("proxy:test", async (event, payload) => {
   const proxyConfig = payload?.proxy || payload || {};
   return await testProxyConnectivity(proxyConfig);
 });
@@ -771,24 +814,33 @@ ipcMain.handle("proxy:test", async (event, payload) => {
 /* =========================
    IPC: proxy set (save + apply)
    ========================= */
-ipcMain.handle("proxy:set", async (event, proxyConfig) => {
+handleIpc("proxy:set", async (event, proxyConfig) => {
   CFG = readConfig();
   CFG.proxy = normalizeProxyConfig(proxyConfig, CFG.proxy);
 
-  writeConfig(CFG);
-  await applyProxyToSession(event.sender.session);
-  await applyProxyToAllSessions();
+  const saved = writeConfig(CFG);
+  const appliedToSender = await applyProxyToSession(event.sender.session);
+  const applyAll = await applyProxyToAllSessions();
 
+  if (!saved) return { ok: false, error: "Failed to save proxy config." };
+  if (!appliedToSender || !applyAll.ok) {
+    return {
+      ok: false,
+      error: "Proxy saved but failed to apply to some sessions.",
+      proxy: { ...CFG.proxy, password: CFG.proxy.password ? "*****" : "" }
+    };
+  }
   return { ok: true, proxy: { ...CFG.proxy, password: CFG.proxy.password ? "*****" : "" } };
 });
 
 /* =========================
    IPC: user agent set
    ========================= */
-ipcMain.handle("ua:set", async (event, payload) => {
+handleIpc("ua:set", async (event, payload) => {
   CFG = readConfig();
   CFG.userAgent = normalizeUserAgentConfig(payload, CFG.userAgent);
-  writeConfig(CFG);
+  const saved = writeConfig(CFG);
+  if (!saved) return { ok: false, error: "Failed to save user agent config." };
   applyUserAgentToAllViews();
   return { ok: true, userAgent: CFG.userAgent };
 });
@@ -796,7 +848,7 @@ ipcMain.handle("ua:set", async (event, payload) => {
 /* =========================
    IPC: Extensions manager
    ========================= */
-ipcMain.handle("ext:pickFolder", async () => {
+handleIpc("ext:pickFolder", async () => {
   const r = await dialog.showOpenDialog({
     title: "Select unpacked Chrome extension folder (contains manifest.json)",
     properties: ["openDirectory"]
@@ -805,7 +857,7 @@ ipcMain.handle("ext:pickFolder", async () => {
   return { ok: true, path: r.filePaths[0] };
 });
 
-ipcMain.handle("ext:list", async (event) => {
+handleIpc("ext:list", async (event) => {
   const ses = event.sender.session;
   CFG = readConfig();
   const loaded = listLoadedExtensions(ses);
@@ -825,14 +877,15 @@ ipcMain.handle("ext:list", async (event) => {
   return { ok: true, configured: merged, loaded };
 });
 
-ipcMain.handle("ext:add", async (event, extPath) => {
+handleIpc("ext:add", async (event, extPath) => {
   const ses = event.sender.session;
   CFG = readConfig();
 
   const p = normalizeExtPath(extPath);
   if (!CFG.extensions.some(x => normalizeExtPath(x.path) === p)) {
     CFG.extensions.push({ path: p, enabled: true });
-    writeConfig(CFG);
+    const saved = writeConfig(CFG);
+    if (!saved) return { ok: false, error: "Failed to save extension config.", path: p };
   }
 
   try {
@@ -843,7 +896,7 @@ ipcMain.handle("ext:add", async (event, extPath) => {
   }
 });
 
-ipcMain.handle("ext:toggle", async (event, payload) => {
+handleIpc("ext:toggle", async (event, payload) => {
   const ses = event.sender.session;
   const p = normalizeExtPath(payload?.path);
   const enable = !!payload?.enabled;
@@ -853,7 +906,8 @@ ipcMain.handle("ext:toggle", async (event, payload) => {
   if (idx === -1) return { ok: false, error: "Extension not found in config." };
 
   CFG.extensions[idx].enabled = enable;
-  writeConfig(CFG);
+  const saved = writeConfig(CFG);
+  if (!saved) return { ok: false, error: "Failed to save extension config." };
 
   const loaded = listLoadedExtensions(ses);
   const found = loaded.find(x => normalizeExtPath(x.path) === p);
@@ -871,13 +925,14 @@ ipcMain.handle("ext:toggle", async (event, payload) => {
   }
 });
 
-ipcMain.handle("ext:remove", async (event, payload) => {
+handleIpc("ext:remove", async (event, payload) => {
   const ses = event.sender.session;
   const p = normalizeExtPath(payload?.path);
 
   CFG = readConfig();
   CFG.extensions = (CFG.extensions || []).filter(x => normalizeExtPath(x.path) !== p);
-  writeConfig(CFG);
+  const saved = writeConfig(CFG);
+  if (!saved) return { ok: false, error: "Failed to save extension config." };
 
   const loaded = listLoadedExtensions(ses);
   const found = loaded.find(x => normalizeExtPath(x.path) === p);
@@ -889,12 +944,12 @@ ipcMain.handle("ext:remove", async (event, payload) => {
 /* =========================
    IPC: Bookmarks
    ========================= */
-ipcMain.handle("bm:list", async () => {
+handleIpc("bm:list", async () => {
   CFG = readConfig();
   return { ok: true, bookmarks: CFG.bookmarks || [] };
 });
 
-ipcMain.handle("bm:add", async (event, payload) => {
+handleIpc("bm:add", async (event, payload) => {
   const title = String(payload?.title || "").trim() || "Bookmark";
   const url = String(payload?.url || "").trim();
   if (!url) return { ok: false, error: "Missing url" };
@@ -903,35 +958,37 @@ ipcMain.handle("bm:add", async (event, payload) => {
   const exists = (CFG.bookmarks || []).some(b => String(b.url) === url);
   if (!exists) {
     CFG.bookmarks.push({ title, url, createdAt: Date.now() });
-    writeConfig(CFG);
+    const saved = writeConfig(CFG);
+    if (!saved) return { ok: false, error: "Failed to save bookmark." };
   }
   return { ok: true };
 });
 
-ipcMain.handle("bm:remove", async (event, payload) => {
+handleIpc("bm:remove", async (event, payload) => {
   const url = String(payload?.url || "").trim();
   CFG = readConfig();
   CFG.bookmarks = (CFG.bookmarks || []).filter(b => String(b.url) !== url);
-  writeConfig(CFG);
+  const saved = writeConfig(CFG);
+  if (!saved) return { ok: false, error: "Failed to save bookmarks." };
   return { ok: true };
 });
 
 /* =========================
    IPC: History
    ========================= */
-ipcMain.handle("hist:list", async () => {
+handleIpc("hist:list", async () => {
   CFG = readConfig();
   return { ok: true, history: CFG.history || [] };
 });
 
-ipcMain.handle("hist:clear", async () => {
+handleIpc("hist:clear", async () => {
   CFG = readConfig();
   CFG.history = [];
-  writeConfig(CFG);
-  return { ok: true };
+  const saved = writeConfig(CFG);
+  return saved ? { ok: true } : { ok: false, error: "Failed to clear history." };
 });
 
-ipcMain.handle("hist:add", async (event, payload) => {
+handleIpc("hist:add", async (event, payload) => {
   const url = String(payload?.url || "").trim();
   const title = String(payload?.title || "").trim();
   if (!url) return { ok: false };
@@ -944,40 +1001,50 @@ ipcMain.handle("hist:add", async (event, payload) => {
   if (last && last.url === url) {
     last.ts = Date.now();
     if (title) last.title = title;
-    writeConfig(CFG);
-    return { ok: true };
+    const saved = writeConfig(CFG);
+    return saved ? { ok: true } : { ok: false, error: "Failed to save history." };
   }
 
   h.unshift({ url, title, ts: Date.now() });
   CFG.history = h.slice(0, Math.max(50, limit));
-  writeConfig(CFG);
-
-  return { ok: true };
+  const saved = writeConfig(CFG);
+  return saved ? { ok: true } : { ok: false, error: "Failed to save history." };
 });
 
 /* =========================
    IPC: Tabs (BrowserView)
    ========================= */
-ipcMain.handle("tab:create", async (event, payload) => {
+handleIpc("tab:create", async (event, payload) => {
   const tabId = Number(payload?.tabId);
   if (!Number.isFinite(tabId)) return { ok: false, error: "Invalid tab id" };
   if (TAB_VIEWS.has(tabId)) return { ok: true };
 
   const incognito = !!payload?.incognito;
   const url = String(payload?.url || "");
-  createTabView(tabId, { incognito, url });
+  const entry = createTabView(tabId, { incognito, url });
+  if (url && entry?.view?.webContents) {
+    try {
+      await entry.view.webContents.loadURL(url);
+    } catch (error) {
+      console.warn("[TAB] initial load failed:", error?.message || error);
+      setActiveTab(tabId);
+      return { ok: false, error: formatError(error) };
+    }
+  }
   setActiveTab(tabId);
   return { ok: true };
 });
 
-ipcMain.handle("tab:switch", async (event, tabId) => {
+handleIpc("tab:switch", async (event, tabId) => {
   const id = Number(tabId);
+  if (!Number.isFinite(id)) return { ok: false, error: "Invalid tab id" };
   setActiveTab(id);
   return { ok: true };
 });
 
-ipcMain.handle("tab:close", async (event, tabId) => {
+handleIpc("tab:close", async (event, tabId) => {
   const id = Number(tabId);
+  if (!Number.isFinite(id)) return { ok: false, error: "Invalid tab id" };
   const entry = TAB_VIEWS.get(id);
   if (!entry) return { ok: true };
   if (ACTIVE_TAB_ID === id && MAIN_WINDOW && entry.view) {
@@ -989,62 +1056,75 @@ ipcMain.handle("tab:close", async (event, tabId) => {
   return { ok: true };
 });
 
-ipcMain.handle("tab:navigate", async (event, payload) => {
+handleIpc("tab:navigate", async (event, payload) => {
   const id = Number(payload?.tabId);
   const url = String(payload?.url || "");
   const entry = TAB_VIEWS.get(id);
   if (!entry || !url) return { ok: false };
-  entry.view.webContents.loadURL(url);
-  return { ok: true };
+  try {
+    await entry.view.webContents.loadURL(url);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: formatError(error) };
+  }
 });
 
-ipcMain.handle("tab:back", async (event, tabId) => {
+handleIpc("tab:back", async (event, tabId) => {
   const entry = TAB_VIEWS.get(Number(tabId));
-  if (entry?.view?.webContents?.canGoBack()) entry.view.webContents.goBack();
+  if (!entry?.view?.webContents) return { ok: false, error: "Tab not found" };
+  if (entry.view.webContents.canGoBack()) entry.view.webContents.goBack();
   return { ok: true };
 });
 
-ipcMain.handle("tab:forward", async (event, tabId) => {
+handleIpc("tab:forward", async (event, tabId) => {
   const entry = TAB_VIEWS.get(Number(tabId));
-  if (entry?.view?.webContents?.canGoForward()) entry.view.webContents.goForward();
+  if (!entry?.view?.webContents) return { ok: false, error: "Tab not found" };
+  if (entry.view.webContents.canGoForward()) entry.view.webContents.goForward();
   return { ok: true };
 });
 
-ipcMain.handle("tab:reload", async (event, tabId) => {
+handleIpc("tab:reload", async (event, tabId) => {
   const entry = TAB_VIEWS.get(Number(tabId));
-  if (entry?.view?.webContents) entry.view.webContents.reload();
+  if (!entry?.view?.webContents) return { ok: false, error: "Tab not found" };
+  entry.view.webContents.reload();
   return { ok: true };
 });
 
-ipcMain.handle("tab:devtools", async (event, tabId) => {
+handleIpc("tab:devtools", async (event, tabId) => {
   const entry = TAB_VIEWS.get(Number(tabId));
-  if (entry?.view?.webContents) entry.view.webContents.openDevTools({ mode: "detach" });
+  if (!entry?.view?.webContents) return { ok: false, error: "Tab not found" };
+  entry.view.webContents.openDevTools({ mode: "detach" });
   return { ok: true };
 });
 
-ipcMain.handle("tab:set-ip", async (event, payload) => {
+handleIpc("tab:set-ip", async (event, payload) => {
   const id = Number(payload?.tabId);
   const ip = String(payload?.ip || "");
   const entry = TAB_VIEWS.get(id);
-  if (!entry) return { ok: false };
+  if (!entry) return { ok: false, error: "Tab not found" };
   entry.ip = ip;
   await injectProtectionIntoView(entry);
   return { ok: true };
 });
 
-ipcMain.handle("tab:resize", async (event, payload) => {
+handleIpc("tab:resize", async (event, payload) => {
   const offset = Number(payload?.topOffset);
   const rightInset = Number(payload?.rightInset);
   const leftInset = Number(payload?.leftInset);
+  let touched = false;
   if (Number.isFinite(offset) && offset >= 0) {
     VIEW_TOP_OFFSET = offset;
+    touched = true;
   }
   if (Number.isFinite(rightInset) && rightInset >= 0) {
     VIEW_RIGHT_INSET = rightInset;
+    touched = true;
   }
   if (Number.isFinite(leftInset) && leftInset >= 0) {
     VIEW_LEFT_INSET = leftInset;
+    touched = true;
   }
+  if (!touched) return { ok: false, error: "Invalid resize payload." };
   resizeActiveView();
   return { ok: true };
 });
