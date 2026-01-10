@@ -433,9 +433,10 @@ function buildIPInjector(ip) {
   return `
     (function(){
       try{
-        window.__PUBLIC_IP__ = ${JSON.stringify(String(ip || ""))};
-        window.__PUBLIC_IP_TS__ = Date.now();
-        console.log("[INJECT] IP injected:", window.__PUBLIC_IP__);
+        const injected = ${JSON.stringify(String(ip || ""))};
+        globalThis.__PUBLIC_IP__ = injected;
+        globalThis.__PUBLIC_IP_TS__ = Date.now();
+        console.log("[INJECT] IP injected:", injected);
       }catch(e){}
     })();
   `;
