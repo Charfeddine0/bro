@@ -141,6 +141,7 @@ let MAIN_WINDOW = null;
 let ACTIVE_TAB_ID = null;
 let VIEW_TOP_OFFSET = 142;
 let VIEW_RIGHT_INSET = 0;
+let VIEW_LEFT_INSET = 0;
 
 /* =========================
    IP Fetch (api.myip.com)
@@ -403,8 +404,9 @@ function resizeActiveView() {
   if (!entry?.view) return;
   const bounds = MAIN_WINDOW.getContentBounds();
   const height = Math.max(0, bounds.height - VIEW_TOP_OFFSET);
-  const width = Math.max(0, bounds.width - VIEW_RIGHT_INSET);
-  entry.view.setBounds({ x: 0, y: VIEW_TOP_OFFSET, width, height });
+  const width = Math.max(0, bounds.width - VIEW_RIGHT_INSET - VIEW_LEFT_INSET);
+  const x = Math.max(0, VIEW_LEFT_INSET);
+  entry.view.setBounds({ x, y: VIEW_TOP_OFFSET, width, height });
 }
 
 function setActiveTab(tabId) {
@@ -699,7 +701,9 @@ app.on("window-all-closed", () => {
    IPC: IP for tab
    ========================= */
 ipcMain.handle("get-ip-for-tab", async (event, tabId) => {
-  const data = await getMyIp(event.sender.session);
+  const entry = TAB_VIEWS.get(Number(tabId));
+  const ses = entry?.view?.webContents?.session || event.sender.session;
+  const data = await getMyIp(ses);
   console.log("[BACKEND] New tab:", tabId, "IP:", data.ip, "Country:", data.country, data.cc);
   return { tabId, ...data };
 });
@@ -708,9 +712,11 @@ ipcMain.handle("get-ip-for-tab", async (event, tabId) => {
    IPC: external geo enrich
    ========================= */
 ipcMain.handle("geo:enrich-ip", async (event, ip) => {
-  const ses = MAIN_WINDOW?.webContents?.session || event.sender.session;
-  const data = await getMyIp(ses);
-  const serviceUrl = `http://127.0.0.1:8787/enrich?ip=${encodeURIComponent(String(data?.ip || ""))}`;
+  const targetIp = String(ip || "").trim();
+  if (!targetIp) {
+    throw new Error("Missing ip");
+  }
+  const serviceUrl = `http://127.0.0.1:8787/enrich?ip=${encodeURIComponent(targetIp)}`;
   const r = await fetch(serviceUrl);
   if (!r.ok) throw new Error("geo_service failed: " + r.status);
   return await r.json();
@@ -1029,11 +1035,15 @@ ipcMain.handle("tab:set-ip", async (event, payload) => {
 ipcMain.handle("tab:resize", async (event, payload) => {
   const offset = Number(payload?.topOffset);
   const rightInset = Number(payload?.rightInset);
+  const leftInset = Number(payload?.leftInset);
   if (Number.isFinite(offset) && offset >= 0) {
     VIEW_TOP_OFFSET = offset;
   }
   if (Number.isFinite(rightInset) && rightInset >= 0) {
     VIEW_RIGHT_INSET = rightInset;
+  }
+  if (Number.isFinite(leftInset) && leftInset >= 0) {
+    VIEW_LEFT_INSET = leftInset;
   }
   resizeActiveView();
   return { ok: true };
