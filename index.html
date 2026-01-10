@@ -329,6 +329,38 @@
   <div class="hr"></div>
   <button id="settingsApply" style="width:100%;">Save settings</button>
   <p class="muted">Settings update the home page, search engine, and theme.</p>
+
+  <div class="hr"></div>
+  <h4>Windows Hardening</h4>
+  <label><input type="checkbox" id="h_disable_ipv6"> Disable IPv6 on active adapters</label><br>
+  <label><input type="checkbox" id="h_set_dns"> Set DNS servers</label>
+  <div class="row"><input id="h_dns_servers" placeholder="DNS servers (comma-separated)"></div><br>
+
+  <div class="row">
+    <label style="min-width:140px;">DoH template</label>
+    <input id="h_doh_template" placeholder="https://cloudflare-dns.com/dns-query">
+  </div><br>
+
+  <div class="row">
+    <label style="min-width:140px;">WebRTC policy</label>
+    <select id="h_webrtc_policy">
+      <option value="default_public_interface_only">default_public_interface_only</option>
+      <option value="disable_non_proxied_udp">disable_non_proxied_udp</option>
+    </select>
+  </div><br>
+
+  <label><input type="checkbox" id="h_disable_quic"> Disable QUIC</label><br>
+
+  <label><input type="checkbox" id="h_force_proxy"> Force proxy</label>
+  <div class="row"><input id="h_proxy_server" placeholder="http=127.0.0.1:8080;https=127.0.0.1:8080"></div><br>
+  <div class="row"><input id="h_proxy_bypass" placeholder="Proxy bypass list (optional)"></div><br>
+
+  <button id="hardeningApply" style="width:100%;">Apply hardening</button>
+  <div class="row" style="justify-content:space-between;align-items:center;margin-top:10px;">
+    <button id="hardeningRollback" class="mini">Rollback</button>
+    <span id="hardeningStatus" class="status wait">Idle</span>
+  </div>
+  <p class="muted">Requires Windows Administrator privileges. A backup is saved before applying changes.</p>
 </div>
 
 <script>
@@ -357,6 +389,17 @@
       searchEngine: "duckduckgo",
       theme: "light"
     },
+    hardening: {
+      disableIPv6: true,
+      setDns: true,
+      dnsServers: ["1.1.1.1", "1.0.0.1"],
+      dohTemplate: "https://cloudflare-dns.com/dns-query",
+      webRtcPolicy: "default_public_interface_only",
+      disableQuic: true,
+      forceProxy: false,
+      proxyServer: "http=127.0.0.1:8080;https=127.0.0.1:8080",
+      proxyBypassList: ""
+    },
     extensions: [],
     bookmarks: [],
     history: [],
@@ -373,6 +416,10 @@
   window.CfgAPI = window.CfgAPI || {
     get: async () => FALLBACK_CONFIG,
     set: async () => ({ ok: false })
+  };
+  window.HardeningAPI = window.HardeningAPI || {
+    apply: async () => ({ ok: false, error: "Hardening unavailable." }),
+    rollback: async () => ({ ok: false, error: "Hardening unavailable." })
   };
   window.ProxyCtl = window.ProxyCtl || {
     set: async () => ({ ok: false }),
@@ -423,6 +470,17 @@
   };
   let UA_CONFIG = { mode: "preset", preset: "chrome-win", custom: "", suffix: "" };
   let SETTINGS_CONFIG = { homeUrl: "https://duckduckgo.com", searchEngine: "duckduckgo", theme: "light" };
+  let HARDENING_CONFIG = {
+    disableIPv6: true,
+    setDns: true,
+    dnsServers: ["1.1.1.1", "1.0.0.1"],
+    dohTemplate: "https://cloudflare-dns.com/dns-query",
+    webRtcPolicy: "default_public_interface_only",
+    disableQuic: true,
+    forceProxy: false,
+    proxyServer: "http=127.0.0.1:8080;https=127.0.0.1:8080",
+    proxyBypassList: ""
+  };
 
   // ===== IP/Geo list in console =====
   window.__IP_GEO_LOG__ = window.__IP_GEO_LOG__ || [];
@@ -1142,6 +1200,9 @@
   const settingsBtn = document.getElementById("settingsBtn");
   const settingsClose = document.getElementById("settingsClose");
   const settingsApply = document.getElementById("settingsApply");
+  const hardeningApply = document.getElementById("hardeningApply");
+  const hardeningRollback = document.getElementById("hardeningRollback");
+  const hardeningStatus = document.getElementById("hardeningStatus");
 
   async function loadSettingsFromConfig(){
     const cfg = await window.CfgAPI.get();
@@ -1152,6 +1213,23 @@
     applyTheme(SETTINGS_CONFIG.theme);
   }
 
+  async function loadHardeningFromConfig(){
+    const cfg = await window.CfgAPI.get();
+    HARDENING_CONFIG = cfg.hardening || HARDENING_CONFIG;
+    document.getElementById("h_disable_ipv6").checked = !!HARDENING_CONFIG.disableIPv6;
+    document.getElementById("h_set_dns").checked = !!HARDENING_CONFIG.setDns;
+    document.getElementById("h_dns_servers").value = (HARDENING_CONFIG.dnsServers || []).join(", ");
+    document.getElementById("h_doh_template").value =
+      HARDENING_CONFIG.dohTemplate || "https://cloudflare-dns.com/dns-query";
+    document.getElementById("h_webrtc_policy").value =
+      HARDENING_CONFIG.webRtcPolicy || "default_public_interface_only";
+    document.getElementById("h_disable_quic").checked = !!HARDENING_CONFIG.disableQuic;
+    document.getElementById("h_force_proxy").checked = !!HARDENING_CONFIG.forceProxy;
+    document.getElementById("h_proxy_server").value =
+      HARDENING_CONFIG.proxyServer || "http=127.0.0.1:8080;https=127.0.0.1:8080";
+    document.getElementById("h_proxy_bypass").value = HARDENING_CONFIG.proxyBypassList || "";
+  }
+
   function collectSettings(){
     return {
       homeUrl: document.getElementById("s_home").value.trim(),
@@ -1160,10 +1238,35 @@
     };
   }
 
+  function collectHardening(){
+    const dnsRaw = document.getElementById("h_dns_servers").value;
+    return {
+      disableIPv6: document.getElementById("h_disable_ipv6").checked,
+      setDns: document.getElementById("h_set_dns").checked,
+      dnsServers: dnsRaw
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+      dohTemplate: document.getElementById("h_doh_template").value.trim(),
+      webRtcPolicy: document.getElementById("h_webrtc_policy").value,
+      disableQuic: document.getElementById("h_disable_quic").checked,
+      forceProxy: document.getElementById("h_force_proxy").checked,
+      proxyServer: document.getElementById("h_proxy_server").value.trim(),
+      proxyBypassList: document.getElementById("h_proxy_bypass").value.trim()
+    };
+  }
+
+  function setHardeningStatus(status, state = "wait") {
+    if (!hardeningStatus) return;
+    hardeningStatus.className = `status ${state}`;
+    hardeningStatus.textContent = status;
+  }
+
   if (settingsBtn) {
     settingsBtn.onclick = () => {
       togglePanel(settingsPanel, async () => {
         await loadSettingsFromConfig();
+        await loadHardeningFromConfig();
       });
     };
   }
@@ -1184,11 +1287,47 @@
     };
   }
 
+  if (hardeningApply) {
+    hardeningApply.onclick = async () => {
+      const payload = collectHardening();
+      setHardeningStatus("Applying...", "wait");
+      hardeningApply.disabled = true;
+      if (hardeningRollback) hardeningRollback.disabled = true;
+      await window.CfgAPI.set({ hardening: payload });
+      const res = await window.HardeningAPI.apply(payload);
+      if (res?.ok) {
+        HARDENING_CONFIG = payload;
+        setHardeningStatus("Applied", "ok");
+      } else {
+        setHardeningStatus(res?.error || "Failed", "error");
+      }
+      hardeningApply.disabled = false;
+      if (hardeningRollback) hardeningRollback.disabled = false;
+    };
+  }
+
+  if (hardeningRollback) {
+    hardeningRollback.onclick = async () => {
+      setHardeningStatus("Rolling back...", "wait");
+      hardeningRollback.disabled = true;
+      if (hardeningApply) hardeningApply.disabled = true;
+      const res = await window.HardeningAPI.rollback();
+      if (res?.ok) {
+        setHardeningStatus("Rolled back", "ok");
+      } else {
+        setHardeningStatus(res?.error || "Failed", "error");
+      }
+      hardeningRollback.disabled = false;
+      if (hardeningApply) hardeningApply.disabled = false;
+    };
+  }
+
   // Init
   (async () => {
     renderPresetOptions();
     await loadUserAgentFromConfig();
     await loadSettingsFromConfig();
+    await loadHardeningFromConfig();
     window.TabAPI.onUpdate(handleTabUpdate);
     currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
     await window.TabAPI.resize({ topOffset: currentTopOffset, rightInset: 0, leftInset: getLeftInset() });
