@@ -455,7 +455,7 @@ function setActiveTab(tabId) {
   resizeActiveView();
 }
 
-function createTabView(tabId, { incognito, url }) {
+async function createTabView(tabId, { incognito, url }) {
   const partition = incognito ? `temp:incog_${tabId}` : `persist:tab_${tabId}`;
   const ses = registerPartition(partition);
   const view = new BrowserView({
@@ -482,7 +482,7 @@ function createTabView(tabId, { incognito, url }) {
   view.webContents.on("dom-ready", () => injectProtectionIntoView(entry));
   view.webContents.on("did-finish-load", () => injectProtectionIntoView(entry));
 
-  applyProxyToSession(ses);
+  await applyProxyToSession(ses);
   applyUserAgentToView(view);
 
   return entry;
@@ -744,7 +744,12 @@ handleIpc("get-ip-for-tab", async (event, tabId) => {
   const entry = TAB_VIEWS.get(resolvedId);
   const ses = entry?.view?.webContents?.session || event.sender.session;
   if (!ses) return { ok: false, error: "Missing session" };
+  await applyProxyToSession(ses);
   const data = await getMyIp(ses);
+  if (entry) {
+    entry.ip = data.ip;
+    await injectProtectionIntoView(entry);
+  }
   console.log("[BACKEND] New tab:", resolvedId, "IP:", data.ip, "Country:", data.country, data.cc);
   return { ok: true, tabId: resolvedId, ...data };
 });
@@ -752,6 +757,7 @@ handleIpc("get-ip-for-tab", async (event, tabId) => {
 handleIpc("get-ip-main", async (event) => {
   const ses = event.sender.session;
   if (!ses) return { ok: false, error: "Missing session" };
+  await applyProxyToSession(ses);
   const data = await getMyIp(ses);
   console.log("[BACKEND] Main session IP:", data.ip, "Country:", data.country, data.cc);
   return { ok: true, ...data };
@@ -1029,7 +1035,7 @@ handleIpc("tab:create", async (event, payload) => {
 
   const incognito = !!payload?.incognito;
   const url = String(payload?.url || "");
-  const entry = createTabView(tabId, { incognito, url });
+  const entry = await createTabView(tabId, { incognito, url });
   if (url && entry?.view?.webContents) {
     try {
       await entry.view.webContents.loadURL(url);
