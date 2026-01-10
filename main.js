@@ -2,6 +2,12 @@ const { app, BrowserWindow, BrowserView, ipcMain, dialog, net, session } = requi
 const path = require("path");
 const fs = require("fs");
 const { fork } = require("child_process");
+const {
+  applyHardening,
+  rollbackHardening,
+  normalizeHardeningOptions,
+  DEFAULT_HARDENING_OPTIONS
+} = require("./hardening");
 
 // WebRTC IP leak mitigation (system-level hint)
 app.commandLine.appendSwitch("force-webrtc-ip-handling-policy", "disable_non_proxied_udp");
@@ -79,6 +85,7 @@ function defaultConfig() {
       searchEngine: "duckduckgo",
       theme: "light"
     },
+    hardening: { ...DEFAULT_HARDENING_OPTIONS },
     extensions: [],
     bookmarks: [],
     history: [],
@@ -101,6 +108,7 @@ function readConfig() {
         proxy: { ...base.proxy, ...(cfg.proxy || {}) },
         userAgent: { ...base.userAgent, ...(cfg.userAgent || {}) },
         settings: { ...base.settings, ...(cfg.settings || {}) },
+        hardening: normalizeHardeningOptions(cfg.hardening || {}),
         extensions: Array.isArray(cfg.extensions) ? cfg.extensions : base.extensions,
         bookmarks: Array.isArray(cfg.bookmarks) ? cfg.bookmarks : base.bookmarks,
         history: Array.isArray(cfg.history) ? cfg.history : base.history
@@ -164,6 +172,15 @@ let ACTIVE_TAB_ID = null;
 let VIEW_TOP_OFFSET = 142;
 let VIEW_RIGHT_INSET = 0;
 let VIEW_LEFT_INSET = 0;
+
+function getNormalizedHardeningConfig() {
+  return normalizeHardeningOptions(CFG?.hardening || {});
+}
+
+function normalizeHardeningConfig(payload, fallback) {
+  if (!payload) return normalizeHardeningOptions(fallback || {});
+  return normalizeHardeningOptions({ ...fallback, ...payload });
+}
 
 /* =========================
    IP Fetch (api.myip.com)
@@ -818,10 +835,12 @@ handleIpc("cfg:get", async () => {
   CFG.proxy = getNormalizedProxyConfig();
   CFG.userAgent = getNormalizedUserAgentConfig();
   CFG.settings = getNormalizedSettingsConfig();
+  CFG.hardening = getNormalizedHardeningConfig();
   return {
     proxy: { ...CFG.proxy, password: CFG.proxy?.password ? "*****" : "" },
     userAgent: CFG.userAgent,
     settings: CFG.settings,
+    hardening: CFG.hardening,
     extensions: CFG.extensions || [],
     bookmarks: CFG.bookmarks || [],
     history: CFG.history || [],
@@ -834,10 +853,42 @@ handleIpc("cfg:get", async () => {
    ========================= */
 handleIpc("cfg:set", async (event, payload) => {
   CFG = readConfig();
-  CFG.settings = normalizeSettingsConfig(payload, CFG.settings);
+  const hasDirectSettings =
+    payload &&
+    (Object.prototype.hasOwnProperty.call(payload, "homeUrl") ||
+      Object.prototype.hasOwnProperty.call(payload, "searchEngine") ||
+      Object.prototype.hasOwnProperty.call(payload, "theme"));
+  if (payload?.settings || hasDirectSettings) {
+    const incomingSettings = payload?.settings || payload;
+    CFG.settings = normalizeSettingsConfig(incomingSettings, CFG.settings);
+  }
+  if (payload?.hardening) {
+    CFG.hardening = normalizeHardeningConfig(payload.hardening, CFG.hardening);
+  }
   const saved = writeConfig(CFG);
   if (!saved) return { ok: false, error: "Failed to save config." };
-  return { ok: true, settings: CFG.settings };
+  return { ok: true, settings: CFG.settings, hardening: CFG.hardening };
+});
+
+/* =========================
+   IPC: chrome hardening (Windows)
+   ========================= */
+handleIpc("hardening:apply", async (event, payload) => {
+  try {
+    const result = applyHardening(payload || {});
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: formatError(error) };
+  }
+});
+
+handleIpc("hardening:rollback", async () => {
+  try {
+    const result = rollbackHardening();
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: formatError(error) };
+  }
 });
 
 /* =========================
