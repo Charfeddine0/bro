@@ -206,21 +206,52 @@ async function fetchJsonWithSession(ses, url, timeoutMs = 10000) {
 }
 
 async function getMyIp(ses) {
-  const url = "https://api.myip.com";
-  if (!ses) {
+  const services = [
+    {
+      name: "api.myip.com",
+      url: "https://api.myip.com",
+      map: (data) => ({
+        ip: data?.ip || "",
+        country: data?.country || "",
+        cc: data?.cc || ""
+      })
+    },
+    {
+      name: "ipapi.co",
+      url: "https://ipapi.co/json/",
+      map: (data) => ({
+        ip: data?.ip || "",
+        country: data?.country_name || data?.country || "",
+        cc: data?.country_code || ""
+      })
+    },
+    {
+      name: "ipify",
+      url: "https://api.ipify.org?format=json",
+      map: (data) => ({
+        ip: data?.ip || "",
+        country: "",
+        cc: ""
+      })
+    }
+  ];
+
+  const errors = [];
+  for (const service of services) {
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
-      return await res.json(); // { ip, country, cc }
-    } catch (fallbackError) {
-      throw new Error(`api.myip.com request failed: ${formatError(fallbackError)}`);
+      const data = ses ? await fetchJsonWithSession(ses, service.url) : await (async () => {
+        const res = await fetch(service.url);
+        if (!res.ok) throw new Error(`${service.name} failed: ${res.status}`);
+        return await res.json();
+      })();
+      const mapped = service.map(data);
+      if (!mapped.ip) throw new Error("missing ip");
+      return mapped;
+    } catch (e) {
+      errors.push(`${service.name}: ${formatError(e)}`);
     }
   }
-  try {
-    return await fetchJsonWithSession(ses, url);
-  } catch (e) {
-    throw new Error(`api.myip.com request failed: ${formatError(e)}`);
-  }
+  throw new Error(`IP lookup failed: ${errors.join(" | ")}`);
 }
 
 /* =========================
