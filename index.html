@@ -108,6 +108,20 @@
       padding:14px; border-radius:16px; z-index:99999;
       max-height: 80vh; overflow:auto; animation:fadeIn .18s ease;
     }
+    #geoPanel{
+      position:fixed; top:72px; left:14px; width:320px;
+      background:#fff; border:1px solid var(--border); box-shadow:var(--shadow);
+      padding:14px; border-radius:16px; z-index:99998;
+      max-height: 80vh; overflow:auto;
+    }
+    body.dark #geoPanel{background:var(--panel-dark);border-color:#1f2937;color:var(--text-dark)}
+    #geoPanel h3{margin:0 0 8px 0;font-size:14px;}
+    #geoList{display:flex;flex-direction:column;gap:10px;}
+    .geo-card{border:1px solid var(--border);border-radius:12px;padding:10px;background:#f8fafc}
+    body.dark .geo-card{background:#0b1220;border-color:#1f2937}
+    .geo-card .title{font-weight:700;margin-bottom:6px;font-size:13px;}
+    .geo-grid{display:grid;grid-template-columns:1fr;gap:4px;font-size:12px;}
+    .geo-label{color:var(--muted)}
     @keyframes fadeIn{from{opacity:.7;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
     .panel h3{margin:0 0 10px 0; font-size:14px;}
     .row{display:flex; gap:8px; align-items:center;}
@@ -160,6 +174,11 @@
 <div id="bmbar"></div>
 <div id="tabs"></div>
 <div id="views"></div>
+
+<div id="geoPanel">
+  <h3>IP / Nominatim</h3>
+  <div id="geoList" class="muted">No data yet.</div>
+</div>
 
 <div id="proxyPanel" class="panel">
   <div class="row" style="justify-content:space-between;">
@@ -401,6 +420,8 @@
 
   // ===== IP/Geo list in console =====
   window.__IP_GEO_LOG__ = window.__IP_GEO_LOG__ || [];
+  const geoPanel = document.getElementById("geoPanel");
+  const geoList = document.getElementById("geoList");
   function logIpGeo(entry){
     window.__IP_GEO_LOG__.unshift(entry);
     console.clear();
@@ -416,6 +437,7 @@
       country: x.geo?.country ?? "",
       address: x.nominatim?.display_name ?? (x.nominatim?.error ?? x.error ?? "")
     })));
+    renderGeoPanel();
   }
 
   function escapeHtml(s){
@@ -425,6 +447,34 @@
       .replaceAll(">","&gt;")
       .replaceAll('"',"&quot;")
       .replaceAll("'","&#039;");
+  }
+
+  function renderGeoPanel(){
+    if (!geoList) return;
+    const entries = window.__IP_GEO_LOG__ || [];
+    if (!entries.length) {
+      geoList.className = "muted";
+      geoList.textContent = "No data yet.";
+      return;
+    }
+    geoList.className = "";
+    geoList.innerHTML = entries.map(entry => {
+      const ts = entry.ts ? new Date(entry.ts).toLocaleString() : "";
+      const address = entry.nominatim?.display_name ?? (entry.nominatim?.error ?? entry.error ?? "");
+      return `
+        <div class="geo-card">
+          <div class="title">Tab ${escapeHtml(entry.tabId)} · ${escapeHtml(ts)}</div>
+          <div class="geo-grid">
+            <div><span class="geo-label">IP:</span> ${escapeHtml(entry.ip)}</div>
+            <div><span class="geo-label">Lat/Lon:</span> ${escapeHtml(entry.geo?.latitude ?? "")} / ${escapeHtml(entry.geo?.longitude ?? "")}</div>
+            <div><span class="geo-label">City:</span> ${escapeHtml(entry.geo?.city ?? "")}</div>
+            <div><span class="geo-label">Region:</span> ${escapeHtml(entry.geo?.region ?? "")}</div>
+            <div><span class="geo-label">Country:</span> ${escapeHtml(entry.geo?.country ?? "")}</div>
+            <div><span class="geo-label">Address:</span> ${escapeHtml(address)}</div>
+          </div>
+        </div>
+      `;
+    }).join("");
   }
 
   function searchUrlForQuery(query){
@@ -696,10 +746,18 @@
     return Math.max(...widths, 0) + PANEL_GAP;
   }
 
+  function getLeftInset(){
+    if (!geoPanel) return 0;
+    if (window.getComputedStyle(geoPanel).display === "none") return 0;
+    const width = geoPanel.getBoundingClientRect().width || 0;
+    return width > 0 ? width + PANEL_GAP : 0;
+  }
+
   function updateViewInset(defer = false){
     const apply = () => {
       const rightInset = getRightInset();
-      window.TabAPI.resize({ topOffset: currentTopOffset, rightInset });
+      const leftInset = getLeftInset();
+      window.TabAPI.resize({ topOffset: currentTopOffset, rightInset, leftInset });
     };
     if (defer) {
       requestAnimationFrame(apply);
@@ -1057,7 +1115,7 @@
     await loadSettingsFromConfig();
     window.TabAPI.onUpdate(handleTabUpdate);
     currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
-    await window.TabAPI.resize({ topOffset: currentTopOffset, rightInset: 0 });
+    await window.TabAPI.resize({ topOffset: currentTopOffset, rightInset: 0, leftInset: getLeftInset() });
     window.addEventListener("resize", () => {
       currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
       updateViewInset();

@@ -3,6 +3,7 @@
 // Started automatically from main.js as child process.
 
 const http = require("http");
+const net = require("net");
 const url = require("url");
 const path = require("path");
 const fs = require("fs");
@@ -102,17 +103,26 @@ async function ensureReader() {
 }
 
 async function enrichIp(ip) {
-  const cached = cache.get(ip);
+  const normalizedIp = String(ip || "").trim();
+  if (!normalizedIp || net.isIP(normalizedIp) === 0) {
+    return { ok: false, error: "Invalid IP address" };
+  }
+
+  const cached = cache.get(normalizedIp);
   if (cached && (Date.now() - cached.ts) < CACHE_TTL_MS) {
     return { ok: true, cached: true, ...cached.data };
   }
 
-  await ensureReader();
+  try {
+    await ensureReader();
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
 
-  const rec = reader.get(ip);
+  const rec = reader.get(normalizedIp);
   if (!rec) {
-    const data = { ip, geo: null, nominatim: null };
-    cache.set(ip, { ts: Date.now(), data });
+    const data = { ip: normalizedIp, geo: null, nominatim: null };
+    cache.set(normalizedIp, { ts: Date.now(), data });
     return { ok: true, cached: false, ...data };
   }
 
@@ -138,8 +148,8 @@ async function enrichIp(ip) {
     }
   }
 
-  const data = { ip, geo, nominatim };
-  cache.set(ip, { ts: Date.now(), data });
+  const data = { ip: normalizedIp, geo, nominatim };
+  cache.set(normalizedIp, { ts: Date.now(), data });
   return { ok: true, cached: false, ...data };
 }
 
@@ -162,6 +172,9 @@ const server = http.createServer(async (req, res) => {
       const ip = String(parsed.query.ip || "").trim();
       if (!ip) return errJson(res, 400, "Missing ip");
       const out = await enrichIp(ip);
+      if (!out.ok) {
+        return errJson(res, 400, out.error || "Invalid ip");
+      }
       return okJson(res, out);
     }
 
