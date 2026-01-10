@@ -359,7 +359,8 @@
   };
 
   window.AutoIP = window.AutoIP || {
-    getIpForTab: async () => ({ ip: "" })
+    getIpForTab: async () => ({ ip: "" }),
+    getMainIp: async () => ({ ip: "" })
   };
   window.GeoAPI = window.GeoAPI || {
     enrichIp: async () => ({ ok: false, error: "Geo service unavailable." })
@@ -477,6 +478,29 @@
     }).join("");
   }
 
+  async function fetchMainBrowserIp(){
+    let info = null;
+    try {
+      info = await window.AutoIP.getMainIp();
+    } catch (e) {
+      info = { ok: false, error: String(e?.message || e) };
+    }
+    if (!info?.ip) {
+      logIpGeo({ ts: Date.now(), tabId: "main", ip: "", ...info });
+      return;
+    }
+
+    let enriched = null;
+    try {
+      enriched = await window.GeoAPI.enrichIp(info.ip);
+    } catch (e) {
+      enriched = { ok: false, error: String(e?.message || e) };
+    }
+
+    const entry = { ts: Date.now(), tabId: "main", ip: info.ip, ...enriched };
+    logIpGeo(entry);
+  }
+
   function searchUrlForQuery(query){
     const encoded = encodeURIComponent(query);
     const engine = SETTINGS_CONFIG.searchEngine || "duckduckgo";
@@ -588,7 +612,7 @@
     tabs.splice(idx, 1);
 
     if (!tabs.length){
-      createTab({ incognito:false, url:getHomeUrl() });
+      onNewTab(false);
       return;
     }
 
@@ -1120,8 +1144,8 @@
       currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
       updateViewInset();
     });
-    createTab({ incognito:false, url: getHomeUrl() });
-    renderTabs();
+    await fetchMainBrowserIp();
+    await onNewTab(false);
     await refreshBookmarks();
   })();
 
