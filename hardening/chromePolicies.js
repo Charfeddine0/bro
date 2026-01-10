@@ -25,7 +25,11 @@ function setChromePolicyDword(name, value) {
 
 function removeChromePolicy(name) {
   const script = `
-    Remove-ItemProperty -Path "${ensureChromePolicyKey()}" -Name "${name}" -ErrorAction SilentlyContinue
+    $path = "${ensureChromePolicyKey()}"
+    $value = Get-ItemPropertyValue -Path $path -Name "${name}" -ErrorAction SilentlyContinue
+    if ($null -ne $value) {
+      Remove-ItemProperty -Path $path -Name "${name}" -ErrorAction SilentlyContinue
+    }
   `;
   runPowerShell(script);
 }
