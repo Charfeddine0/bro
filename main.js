@@ -207,10 +207,7 @@ async function fetchJsonWithSession(ses, url, timeoutMs = 10000) {
 
 async function getMyIp(ses) {
   const url = "https://api.myip.com";
-  try {
-    if (!ses) throw new Error("missing session");
-    return await fetchJsonWithSession(ses, url);
-  } catch (e) {
+  if (!ses) {
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error("api.myip.com failed: " + res.status);
@@ -218,6 +215,11 @@ async function getMyIp(ses) {
     } catch (fallbackError) {
       throw new Error(`api.myip.com request failed: ${formatError(fallbackError)}`);
     }
+  }
+  try {
+    return await fetchJsonWithSession(ses, url);
+  } catch (e) {
+    throw new Error(`api.myip.com request failed: ${formatError(e)}`);
   }
 }
 
