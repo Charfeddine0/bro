@@ -749,6 +749,14 @@ handleIpc("get-ip-for-tab", async (event, tabId) => {
   return { ok: true, tabId: resolvedId, ...data };
 });
 
+handleIpc("get-ip-main", async (event) => {
+  const ses = event.sender.session;
+  if (!ses) return { ok: false, error: "Missing session" };
+  const data = await getMyIp(ses);
+  console.log("[BACKEND] Main session IP:", data.ip, "Country:", data.country, data.cc);
+  return { ok: true, ...data };
+});
+
 /* =========================
    IPC: external geo enrich
    ========================= */

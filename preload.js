@@ -1,7 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("AutoIP", {
-  getIpForTab: (tabId) => ipcRenderer.invoke("get-ip-for-tab", tabId)
+  getIpForTab: (tabId) => ipcRenderer.invoke("get-ip-for-tab", tabId),
+  getMainIp: () => ipcRenderer.invoke("get-ip-main")
 });
 
 contextBridge.exposeInMainWorld("GeoAPI", {

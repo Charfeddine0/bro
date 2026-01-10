@@ -359,7 +359,8 @@
   };
 
   window.AutoIP = window.AutoIP || {
-    getIpForTab: async () => ({ ip: "" })
+    getIpForTab: async () => ({ ip: "" }),
+    getMainIp: async () => ({ ip: "" })
   };
   window.GeoAPI = window.GeoAPI || {
     enrichIp: async () => ({ ok: false, error: "Geo service unavailable." })
@@ -475,6 +476,29 @@
         </div>
       `;
     }).join("");
+  }
+
+  async function fetchMainBrowserIp(){
+    let info = null;
+    try {
+      info = await window.AutoIP.getMainIp();
+    } catch (e) {
+      info = { ok: false, error: String(e?.message || e) };
+    }
+    if (!info?.ip) {
+      logIpGeo({ ts: Date.now(), tabId: "main", ip: "", ...info });
+      return;
+    }
+
+    let enriched = null;
+    try {
+      enriched = await window.GeoAPI.enrichIp(info.ip);
+    } catch (e) {
+      enriched = { ok: false, error: String(e?.message || e) };
+    }
+
+    const entry = { ts: Date.now(), tabId: "main", ip: info.ip, ...enriched };
+    logIpGeo(entry);
   }
 
   function searchUrlForQuery(query){
@@ -1120,6 +1144,7 @@
       currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
       updateViewInset();
     });
+    await fetchMainBrowserIp();
     await onNewTab(false);
     await refreshBookmarks();
   })();
