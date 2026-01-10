@@ -588,7 +588,7 @@
     tabs.splice(idx, 1);
 
     if (!tabs.length){
-      createTab({ incognito:false, url:getHomeUrl() });
+      onNewTab(false);
       return;
     }
 
@@ -1120,8 +1120,7 @@
       currentTopOffset = Math.round(viewsEl.getBoundingClientRect().top || 0);
       updateViewInset();
     });
-    createTab({ incognito:false, url: getHomeUrl() });
-    renderTabs();
+    await onNewTab(false);
     await refreshBookmarks();
   })();
 
