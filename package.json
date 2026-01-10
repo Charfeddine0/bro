@@ -8,7 +8,7 @@
     "proxy:test": "node scripts/proxy_test.js"
   },
   "dependencies": {
-    "maxmind": "^4.4.0"
+    "maxmind": "^4.3.0"
   },
   "devDependencies": {
     "electron": "^30.5.1"
