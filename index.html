@@ -121,6 +121,11 @@
     body.dark .geo-card{background:#0b1220;border-color:#1f2937}
     .geo-card .title{font-weight:700;margin-bottom:6px;font-size:13px;}
     .geo-grid{display:grid;grid-template-columns:1fr;gap:4px;font-size:12px;}
+    .geo-section{margin-top:8px;}
+    .geo-section-title{font-weight:700;font-size:12px;margin-bottom:4px;}
+    .geo-pre{white-space:pre-wrap;background:#fff;border:1px dashed var(--border);border-radius:10px;padding:8px;font-size:11px;margin:6px 0 0 0;}
+    body.dark .geo-pre{background:#0f172a;border-color:#1f2937}
+    details.geo-raw{margin-top:6px;}
     .geo-label{color:var(--muted)}
     @keyframes fadeIn{from{opacity:.7;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
     .panel h3{margin:0 0 10px 0; font-size:14px;}
@@ -450,6 +455,29 @@
       .replaceAll("'","&#039;");
   }
 
+  function formatValue(value){
+    if (value == null) return "";
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  function renderKeyValueGrid(obj){
+    if (!obj || typeof obj !== "object") {
+      return `<div class="muted">No data</div>`;
+    }
+    const entries = Object.entries(obj);
+    if (!entries.length) return `<div class="muted">No data</div>`;
+    return entries.map(([key, value]) => (
+      `<div><span class="geo-label">${escapeHtml(key)}:</span> ${escapeHtml(formatValue(value))}</div>`
+    )).join("");
+  }
+
   function renderGeoPanel(){
     if (!geoList) return;
     const entries = window.__IP_GEO_LOG__ || [];
@@ -462,6 +490,10 @@
     geoList.innerHTML = entries.map(entry => {
       const ts = entry.ts ? new Date(entry.ts).toLocaleString() : "";
       const address = entry.nominatim?.display_name ?? (entry.nominatim?.error ?? entry.error ?? "");
+      const nominatimRaw = entry.nominatim_raw || entry.nominatim?.raw || null;
+      const geoRaw = entry.geo_raw || null;
+      const nominatimRawText = nominatimRaw ? JSON.stringify(nominatimRaw, null, 2) : "";
+      const geoRawText = geoRaw ? JSON.stringify(geoRaw, null, 2) : "";
       return `
         <div class="geo-card">
           <div class="title">Tab ${escapeHtml(entry.tabId)} · ${escapeHtml(ts)}</div>
@@ -472,6 +504,26 @@
             <div><span class="geo-label">Region:</span> ${escapeHtml(entry.geo?.region ?? "")}</div>
             <div><span class="geo-label">Country:</span> ${escapeHtml(entry.geo?.country ?? "")}</div>
             <div><span class="geo-label">Address:</span> ${escapeHtml(address)}</div>
+          </div>
+          <div class="geo-section">
+            <div class="geo-section-title">GeoLite2 Details</div>
+            <div class="geo-grid">${renderKeyValueGrid(entry.geo)}</div>
+            ${geoRawText ? `
+              <details class="geo-raw">
+                <summary class="geo-label">Raw GeoLite2 data</summary>
+                <pre class="geo-pre">${escapeHtml(geoRawText)}</pre>
+              </details>
+            ` : ""}
+          </div>
+          <div class="geo-section">
+            <div class="geo-section-title">Nominatim Details</div>
+            <div class="geo-grid">${renderKeyValueGrid(entry.nominatim)}</div>
+            ${nominatimRawText ? `
+              <details class="geo-raw">
+                <summary class="geo-label">Raw Nominatim data</summary>
+                <pre class="geo-pre">${escapeHtml(nominatimRawText)}</pre>
+              </details>
+            ` : ""}
           </div>
         </div>
       `;

@@ -89,7 +89,8 @@ async function reverseNominatim(lat, lon) {
       postcode: addr.postcode || "",
       country: addr.country || "",
       country_code: addr.country_code || ""
-    }
+    },
+    raw: j
   };
 }
 
@@ -133,10 +134,20 @@ async function enrichIp(ip) {
     city: safePickCity(rec),
     region: safePickRegion(rec),
     country: safePickCountry(rec),
+    country_code: rec?.country?.iso_code || "",
+    continent: pickName(rec?.continent?.names),
     postal: rec?.postal?.code || "",
     latitude: typeof lat === "number" ? lat : null,
     longitude: typeof lon === "number" ? lon : null,
-    timezone: rec?.location?.time_zone || ""
+    timezone: rec?.location?.time_zone || "",
+    accuracy_radius: rec?.location?.accuracy_radius ?? null,
+    metro_code: rec?.location?.metro_code ?? null,
+    subdivisions: Array.isArray(rec?.subdivisions)
+      ? rec.subdivisions.map((sub) => ({
+        name: pickName(sub?.names),
+        iso_code: sub?.iso_code || ""
+      }))
+      : []
   };
 
   let nominatim = null;
@@ -148,7 +159,13 @@ async function enrichIp(ip) {
     }
   }
 
-  const data = { ip: normalizedIp, geo, nominatim };
+  const data = {
+    ip: normalizedIp,
+    geo,
+    geo_raw: rec,
+    nominatim,
+    nominatim_raw: nominatim?.raw ?? null
+  };
   cache.set(normalizedIp, { ts: Date.now(), data });
   return { ok: true, cached: false, ...data };
 }
