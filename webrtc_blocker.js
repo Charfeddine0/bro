@@ -2,9 +2,75 @@
   const makeErr = (msg) => Object.assign(new Error(msg), { name: "NotAllowedError" });
   const rejectNow = () => Promise.reject(makeErr("Blocked by Strong Anti-FP mode."));
 
+  const isValidIPv4 = (value) => {
+    if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(value)) return false;
+    const parts = value.split(".");
+    return parts.every((part) => {
+      if (part.length > 1 && part.startsWith("0")) return false;
+      const num = Number(part);
+      return Number.isInteger(num) && num >= 0 && num <= 255;
+    });
+  };
+  const isValidIPv6 = (value) => {
+    if (!/^[0-9a-f:]+$/i.test(value) || !value.includes(":")) return false;
+    if (value.includes(":::")) return false;
+    return true;
+  };
+  const isLikelyHostname = (value) => /[a-z]/i.test(value) && /[.-]/.test(value);
+  const LOCAL_HOSTNAME_RE = /\b[a-z0-9-]+\.(local|lan|home|internal)\b/gi;
+  const maskBareAddressToken = (value) => {
+    if (typeof value !== "string") return value;
+    if (isValidIPv4(value) || isValidIPv6(value) || isLikelyHostname(value)) {
+      return getInjectedIp();
+    }
+    return value;
+  };
+  const maskHostPortToken = (value) => {
+    if (typeof value !== "string") return value;
+    const bracketMatch = value.match(/^\[([^\]]+)\](?::(\d+))?$/);
+    if (bracketMatch) {
+      const host = bracketMatch[1];
+      const port = bracketMatch[2] ? `:${bracketMatch[2]}` : "";
+      const maskedHost = maskBareAddressToken(host);
+      return maskedHost === host ? value : `[${maskedHost}]${port}`;
+    }
+    const parts = value.split(":");
+    if (parts.length === 2 && /^\d+$/.test(parts[1])) {
+      const maskedHost = maskBareAddressToken(parts[0]);
+      return maskedHost === parts[0] ? value : `${maskedHost}:${parts[1]}`;
+    }
+    return value;
+  };
+  const maskAddressToken = (value) => {
+    if (typeof value !== "string") return value;
+    const hostPortMasked = maskHostPortToken(value);
+    if (hostPortMasked !== value) return hostPortMasked;
+    return maskBareAddressToken(value);
+  };
+  const maskSdpAttributeToken = (token) => {
+    if (typeof token !== "string" || !token.includes(":")) return token;
+    const [key, rawValue] = token.split(":", 2);
+    if (!rawValue) return token;
+    if (key === "cname" || key === "mslabel" || key === "label") {
+      const masked = maskAddressToken(rawValue);
+      if (masked !== rawValue) return `${key}:${masked}`;
+      const hostnameMasked = rawValue.replace(LOCAL_HOSTNAME_RE, getInjectedIp());
+      if (hostnameMasked !== rawValue) return `${key}:${hostnameMasked}`;
+    }
+    return token;
+  };
+
   const getInjectedIp = () => {
     const ip = String(globalThis.__PUBLIC_IP__ || "").trim();
-    return ip || "0.0.0.0";
+    if (ip && (isValidIPv4(ip) || isValidIPv6(ip))) return ip;
+    if (globalThis.__PUBLIC_IP_FALLBACK__) return globalThis.__PUBLIC_IP_FALLBACK__;
+    const fallback = "203.0.113.1";
+    try {
+      Object.defineProperty(globalThis, "__PUBLIC_IP_FALLBACK__", { value: fallback });
+    } catch {
+      globalThis.__PUBLIC_IP_FALLBACK__ = fallback;
+    }
+    return fallback;
   };
 
   const maskIpLiteral = (value) => {
@@ -12,12 +78,114 @@
     return maskCandidate(value);
   };
 
+  const maskCandidateLine = (line) => {
+    if (typeof line !== "string") return line;
+    if (!line.includes("candidate:") && !line.includes("a=candidate:")) return line;
+    const replacement = getInjectedIp();
+    const parts = line.split(" ");
+    if (parts.length > 4) {
+      parts[4] = maskAddressToken(parts[4]);
+    }
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      if (parts[i] === "raddr") {
+        parts[i + 1] = replacement;
+      }
+    }
+    return parts.join(" ");
+  };
+
+  const maskRemoteCandidatesLine = (line) => {
+    if (typeof line !== "string") return line;
+    if (!line.startsWith("a=remote-candidates:") && !line.startsWith("a=local-candidates:")) return line;
+    const [prefix, rest] = line.split(":", 2);
+    if (!rest) return line;
+    const tokens = rest.trim().split(/\s+/);
+    for (let i = 0; i < tokens.length; i += 1) {
+      tokens[i] = maskAddressToken(tokens[i]);
+    }
+    return `${prefix}:${tokens.join(" ")}`;
+  };
+
+  const maskIceServerUrl = (url) => {
+    if (typeof url !== "string") return url;
+    const lower = url.toLowerCase();
+    if (!lower.startsWith("stun:") && !lower.startsWith("turn:") && !lower.startsWith("turns:")) {
+      return maskCandidate(url);
+    }
+    const replacement = getInjectedIp();
+    const hostAndRest = url.slice(url.indexOf(":") + 1);
+    const atIndex = hostAndRest.indexOf("@");
+    const hostPortAndParams = atIndex === -1 ? hostAndRest : hostAndRest.slice(atIndex + 1);
+    const [hostPort, ...rest] = hostPortAndParams.split("?");
+    let host = hostPort;
+    let port = "";
+    if (hostPort.startsWith("[")) {
+      const end = hostPort.indexOf("]");
+      if (end !== -1) {
+        host = hostPort.slice(1, end);
+        port = hostPort.slice(end + 1).replace(/^:/, "");
+      }
+    } else if (hostPort.includes(":")) {
+      const pieces = hostPort.split(":");
+      host = pieces[0];
+      port = pieces.slice(1).join(":");
+    }
+    const maskedHost = host ? maskAddressToken(host) : host;
+    const bracketedHost = hostPort.startsWith("[") ? `[${maskedHost}]` : maskedHost;
+    const rebuiltHostPort = port ? `${bracketedHost}:${port}` : bracketedHost;
+    const rebuilt = [rebuiltHostPort, ...rest].join("?");
+    return `${url.slice(0, url.indexOf(":") + 1)}${atIndex === -1 ? "" : hostAndRest.slice(0, atIndex + 1)}${rebuilt}`;
+  };
+
   const maskCandidate = (candidate) => {
     if (!candidate) return candidate;
     const replacement = getInjectedIp();
-    return candidate
+    return maskCandidateLine(candidate)
       .replace(/\b(\d{1,3}\.){3}\d{1,3}\b/g, replacement)
-      .replace(/\b([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\b/gi, replacement);
+      .replace(/\b([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\b/gi, replacement)
+      .replace(LOCAL_HOSTNAME_RE, replacement);
+  };
+
+  const maskSdpLines = (lines) => {
+    const replacement = getInjectedIp();
+    return lines.map((line) => {
+      if (line.startsWith("a=candidate:") || line.startsWith("candidate:")) {
+        return maskCandidateLine(line)
+          .replace(LOCAL_HOSTNAME_RE, replacement)
+          .replace(/\b(\d{1,3}\.){3}\d{1,3}\b/g, replacement)
+          .replace(/\b([0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\b/gi, replacement);
+      }
+      if (line.startsWith("a=remote-candidates:") || line.startsWith("a=local-candidates:")) {
+        return maskRemoteCandidatesLine(line).replace(LOCAL_HOSTNAME_RE, replacement);
+      }
+      if (line.startsWith("a=ssrc:")) {
+        const tokens = line.split(" ");
+        const next = tokens.map((token, index) => (index === 0 ? token : maskSdpAttributeToken(token)));
+        return next.join(" ").replace(LOCAL_HOSTNAME_RE, replacement);
+      }
+      if (line.startsWith("o=")) {
+        const parts = line.split(" ");
+        const addrIndex = parts.findIndex((part, idx) => idx > 0 && (part === "IP4" || part === "IP6"));
+        if (addrIndex !== -1 && parts[addrIndex + 1]) {
+          parts[addrIndex + 1] = maskAddressToken(parts[addrIndex + 1]);
+          return parts.join(" ");
+        }
+      }
+      if (line.startsWith("c=IN IP4 ") || line.startsWith("c=IN IP6 ")) {
+        const parts = line.split(" ");
+        if (parts.length >= 3) parts[parts.length - 1] = maskAddressToken(parts[parts.length - 1]);
+        return parts.join(" ");
+      }
+      if (line.startsWith("a=rtcp:")) {
+        const parts = line.split(" ");
+        const addrIndex = parts.findIndex((part, idx) => idx > 0 && (part === "IP4" || part === "IP6"));
+        if (addrIndex !== -1 && parts[addrIndex + 1]) {
+          parts[addrIndex + 1] = maskAddressToken(parts[addrIndex + 1]);
+          return parts.join(" ");
+        }
+      }
+      return maskCandidate(line).replace(LOCAL_HOSTNAME_RE, replacement);
+    });
   };
 
   const maskIpInObject = (obj) => {
@@ -51,9 +219,9 @@
       if (!server || typeof server !== "object") return server;
       const copy = { ...server };
       if (typeof copy.urls === "string") {
-        copy.urls = maskCandidate(copy.urls);
+        copy.urls = maskIceServerUrl(copy.urls);
       } else if (Array.isArray(copy.urls)) {
-        copy.urls = copy.urls.map((url) => (typeof url === "string" ? maskCandidate(url) : url));
+        copy.urls = copy.urls.map((url) => (typeof url === "string" ? maskIceServerUrl(url) : url));
       }
       if (typeof copy.username === "string") {
         copy.username = maskCandidate(copy.username);
@@ -122,7 +290,8 @@
 
   const maskSdp = (sdp) => {
     if (!sdp) return sdp;
-    return maskCandidate(sdp);
+    const lines = String(sdp).split(/\r?\n/);
+    return maskSdpLines(lines).join("\r\n");
   };
 
   const wrapSessionDescription = (desc) => {
