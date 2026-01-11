@@ -73,9 +73,18 @@
     return fallback;
   };
 
+  const maskStringValue = (value) => {
+    if (typeof value !== "string") return value;
+    const replacement = getInjectedIp();
+    const withLocal = value.replace(LOCAL_HOSTNAME_RE, replacement);
+    const parts = withLocal.split(/(\s+)/);
+    const maskedParts = parts.map((part) => (part.trim() ? maskAddressToken(part) : part));
+    return maskCandidate(maskedParts.join(""));
+  };
+
   const maskIpLiteral = (value) => {
     if (typeof value !== "string") return value;
-    return maskCandidate(value);
+    return maskStringValue(value);
   };
 
   const maskCandidateLine = (line) => {
@@ -184,7 +193,7 @@
           return parts.join(" ");
         }
       }
-      return maskCandidate(line).replace(LOCAL_HOSTNAME_RE, replacement);
+      return maskStringValue(line);
     });
   };
 
@@ -197,10 +206,10 @@
       for (const key of Object.keys(value)) {
         const entry = value[key];
         if (typeof entry === "string") {
-          value[key] = maskCandidate(entry);
+          value[key] = maskStringValue(entry);
         } else if (Array.isArray(entry)) {
           value[key] = entry.map((item) => {
-            if (typeof item === "string") return maskCandidate(item);
+            if (typeof item === "string") return maskStringValue(item);
             if (item && typeof item === "object") return walk(item);
             return item;
           });
@@ -224,10 +233,10 @@
         copy.urls = copy.urls.map((url) => (typeof url === "string" ? maskIceServerUrl(url) : url));
       }
       if (typeof copy.username === "string") {
-        copy.username = maskCandidate(copy.username);
+        copy.username = maskStringValue(copy.username);
       }
       if (typeof copy.credential === "string") {
-        copy.credential = maskCandidate(copy.credential);
+        copy.credential = maskStringValue(copy.credential);
       }
       return copy;
     });
